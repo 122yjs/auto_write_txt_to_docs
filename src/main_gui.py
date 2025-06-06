@@ -20,13 +20,16 @@ import pystray
 # backend_processor 임포트
 try:
     # Docs 기록 기능 버전의 backend_processor 임포트
-    from backend_processor import run_monitoring
+    from src.backend_processor import run_monitoring
 except ImportError:
     messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
     run_monitoring = None # 함수 부재 처리
 
 # --- 기본 설정 ---
-CONFIG_FILE = "config.json"
+# 현재 파일(main_gui.py)의 디렉토리 -> src
+# src의 부모 디렉토리 -> 프로젝트 루트
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
 # ICON_PATH = "icon.png" # 더 이상 필요 없음
 
 # --- Helper Function: URL에서 ID 추출 ---
@@ -144,7 +147,8 @@ class MessengerDocsApp:
         """로깅 시스템 설정"""
         try:
             # logs 폴더 생성 (절대 경로 사용)
-            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # PROJECT_ROOT는 파일 상단에 정의되어 있음
+            current_dir = PROJECT_ROOT # 프로젝트 루트를 기준으로 logs 폴더 생성
             log_dir = os.path.join(current_dir, "logs")
             if not os.path.exists(log_dir):
                 os.makedirs(log_dir)
