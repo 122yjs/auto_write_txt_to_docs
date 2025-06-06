@@ -26,11 +26,9 @@ except ImportError:
     run_monitoring = None # 함수 부재 처리
 
 # --- 기본 설정 ---
-# 안전한 경로 설정 (배포 환경 지원)
-from src.auto_write_txt_to_docs.path_utils import PROJECT_ROOT_STR, CONFIG_FILE_STR
-
-PROJECT_ROOT = PROJECT_ROOT_STR
-CONFIG_FILE = CONFIG_FILE_STR
+# 현재 파일(main_gui.py)의 디렉토리 -> 프로젝트 루트
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
 # ICON_PATH = "icon.png" # 더 이상 필요 없음
 
 # --- Helper Function: URL에서 ID 추출 ---
@@ -51,7 +49,6 @@ class MessengerDocsApp:
 
         # --- 변수 선언 ---
         self.watch_folder = ctk.StringVar()
-        self.credentials_path = ctk.StringVar()
         self.docs_input = ctk.StringVar()
 
         self.is_monitoring = False
@@ -71,7 +68,6 @@ class MessengerDocsApp:
         
         # 설정 변수 변경 감지를 위한 추적
         self.watch_folder.trace('w', self.on_setting_changed)
-        self.credentials_path.trace('w', self.on_setting_changed)
         self.docs_input.trace('w', self.on_setting_changed)
         self.settings_changed = False
 
@@ -207,7 +203,6 @@ class MessengerDocsApp:
     def validate_inputs(self):
         """입력값 유효성 검사"""
         watch_folder = self.watch_folder.get().strip()
-        credentials_path = self.credentials_path.get().strip()
         docs_input_val = self.docs_input.get().strip()
         
         errors = []
@@ -220,15 +215,7 @@ class MessengerDocsApp:
         elif not os.path.isdir(watch_folder):
             errors.append("감시 폴더 경로가 폴더가 아닙니다.")
         
-        # Credentials 파일 검사
-        if not credentials_path:
-            errors.append("Credentials 파일을 선택해주세요.")
-        elif not os.path.exists(credentials_path):
-            errors.append("Credentials 파일이 존재하지 않습니다.")
-        elif not os.path.isfile(credentials_path):
-            errors.append("Credentials 경로가 파일이 아닙니다.")
-        elif not credentials_path.lower().endswith('.json'):
-            errors.append("Credentials 파일은 JSON 형식이어야 합니다.")
+        # Credentials 파일은 path_utils에서 자동으로 관리됩니다
         
         # Google Docs URL/ID 검사
         if not docs_input_val:
@@ -297,12 +284,7 @@ class MessengerDocsApp:
         ctk.CTkButton(folder_frame, text="폴더 선택...", width=80, command=self.browse_folder).pack(side="left", padx=(5,0))
         ctk.CTkButton(folder_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(self.watch_folder.get())).pack(side="left", padx=(5,0))
         
-        # Credentials 파일 설정
-        cred_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); cred_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(cred_frame, text="Credentials 파일:", width=120).pack(side="left", padx=(0,5))
-        ctk.CTkEntry(cred_frame, textvariable=self.credentials_path).pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkButton(cred_frame, text="파일 선택...", width=80, command=self.browse_credentials).pack(side="left", padx=(5,0))
-        ctk.CTkButton(cred_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(os.path.dirname(self.credentials_path.get()) if self.credentials_path.get() else "")).pack(side="left", padx=(5,0))
+        # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
         
         # Google Docs URL/ID 설정
         docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
@@ -407,9 +389,7 @@ class MessengerDocsApp:
     def browse_folder(self):
         foldername = filedialog.askdirectory(title="감시할 폴더 선택")
         if foldername: self.watch_folder.set(foldername); self.log(f"감시 폴더: {foldername}")
-    def browse_credentials(self):
-        filepath = filedialog.askopenfilename(title="Credentials JSON 파일 선택", filetypes=[("JSON", "*.json")])
-        if filepath: self.credentials_path.set(filepath); self.log(f"Credentials 파일: {filepath}")
+    # browse_credentials 함수는 더 이상 필요하지 않습니다 (path_utils에서 자동 관리)
     def log(self, message):
         try:
             # GUI 로그 출력
@@ -457,7 +437,7 @@ class MessengerDocsApp:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_log_queue)
     def save_config(self):
-        config_data = { "watch_folder": self.watch_folder.get(), "credentials_path": self.credentials_path.get(), "docs_input": self.docs_input.get() }
+        config_data = { "watch_folder": self.watch_folder.get(), "docs_input": self.docs_input.get() }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
             self.log("설정 저장 완료.")
@@ -466,7 +446,7 @@ class MessengerDocsApp:
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f: config_data = json.load(f)
-                self.watch_folder.set(config_data.get("watch_folder", "")); self.credentials_path.set(config_data.get("credentials_path", "")); self.docs_input.set(config_data.get("docs_input", ""))
+                self.watch_folder.set(config_data.get("watch_folder", "")); self.docs_input.set(config_data.get("docs_input", ""))
                 self.log("저장된 설정 로드 완료.")
             except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
         else: self.log("저장된 설정 파일 없음.")
@@ -485,7 +465,6 @@ class MessengerDocsApp:
             return
         
         watch_folder = self.watch_folder.get().strip()
-        credentials_path = self.credentials_path.get().strip()
         docs_input_val = self.docs_input.get().strip()
         docs_id = extract_google_id_from_url(docs_input_val)
         
@@ -498,7 +477,6 @@ class MessengerDocsApp:
         
         current_config = { 
             "watch_folder": watch_folder, 
-            "credentials_path": credentials_path, 
             "docs_id": docs_id 
         }
         
