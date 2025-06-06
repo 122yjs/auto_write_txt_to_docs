@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Sensitive files - 중요! 실제 파일 경로와 일치해야 합니다.
+token.json
+credentials.json 
+config.json # 개인 설정이 포함될 수 있으므로 추가하는 것을 고려해보세요.
+added_lines_cache.json # 이 파일도 사용자별 데이터일 수 있습니다.
+
+# Log files
+*.log
+hwp_mcp_stdio_server.log
+
+# IDE / Editor specific files
+.vscode/ # VS Code 설정 (팀 공유 필요시 제외)
+.idea/ # PyCharm 등 다른 IDE 설정
