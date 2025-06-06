@@ -13,7 +13,7 @@
 
 1. 프로젝트 클론
 ```bash
-git clone https://github.com/yourusername/auto_write.git
+git clone https://github.com/122yjs/auto_write_txt_to_docs
 cd auto_write
 ```
 
