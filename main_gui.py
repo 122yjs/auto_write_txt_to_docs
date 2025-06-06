@@ -1,11 +1,17 @@
 # main_gui.py (아이콘 생성 + Docs 기록 + 트레이 기능 버전)
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import filedialog, messagebox
 import os
 import json
 import threading
 import queue
 import re
+import time
+import subprocess
+import platform
+import logging
+from datetime import datetime
 
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
@@ -52,6 +58,18 @@ class MessengerDocsApp:
         self.tray_icon = None
         self.tray_thread = None
         self.icon_image = None # 아이콘 이미지 객체 저장
+        
+        # 상태 표시 변수
+        self.status_var = ctk.StringVar(value="준비")
+        
+        # 로깅 시스템 초기화
+        self.setup_logging()
+        
+        # 설정 변수 변경 감지를 위한 추적
+        self.watch_folder.trace('w', self.on_setting_changed)
+        self.credentials_path.trace('w', self.on_setting_changed)
+        self.docs_input.trace('w', self.on_setting_changed)
+        self.settings_changed = False
 
         # --- 아이콘 이미지 생성 또는 로드 ---
         self.create_or_load_icon() # 함수 이름 변경
@@ -61,6 +79,7 @@ class MessengerDocsApp:
 
         # --- 설정 로드 ---
         self.load_config()
+        self.settings_changed = False  # 로드 후 변경 플래그 초기화
 
         # --- 로그 큐 처리 ---
         self.root.after(100, self.process_log_queue)
@@ -74,6 +93,10 @@ class MessengerDocsApp:
             self.start_tray_thread()
         else:
              self.log("오류: 아이콘 이미지를 준비할 수 없어 트레이 기능을 시작할 수 없습니다.")
+        
+        # --- 초기화 완료 로그 ---
+        self.log("애플리케이션 초기화 완료.")
+        self.log("설정을 확인하고 '감시 시작' 버튼을 클릭하세요.")
 
 
     def create_default_icon(self):
@@ -116,28 +139,163 @@ class MessengerDocsApp:
             messagebox.showerror("아이콘 오류", f"아이콘 준비 중 오류 발생:\n{e}", parent=self.root)
             self.log(f"오류: 아이콘 준비 실패 - {e}")
             self.icon_image = None # 오류 시 아이콘 없음 처리
+    
+    def setup_logging(self):
+        """로깅 시스템 설정"""
+        try:
+            # logs 폴더 생성 (절대 경로 사용)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            log_dir = os.path.join(current_dir, "logs")
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+                print(f"로그 디렉토리 생성: {log_dir}")
+            
+            # 로그 파일명 (날짜별)
+            log_filename = os.path.join(log_dir, f"messenger_docs_{datetime.now().strftime('%Y%m%d')}.log")
+            print(f"로그 파일 경로: {log_filename}")
+            
+            # 기존 로거 완전 초기화
+            logger_name = 'MessengerDocsApp'
+            if logger_name in logging.Logger.manager.loggerDict:
+                del logging.Logger.manager.loggerDict[logger_name]
+            
+            # 새로운 로거 생성
+            self.logger = logging.getLogger(logger_name)
+            self.logger.setLevel(logging.INFO)
+            self.logger.handlers.clear()  # 모든 핸들러 제거
+            
+            # 파일 핸들러 생성 (mode='a'로 추가 모드 사용)
+            file_handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
+            file_handler.setLevel(logging.INFO)
+            
+            # 포맷터 설정
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            
+            # 핸들러 추가
+            self.logger.addHandler(file_handler)
+            
+            # 로깅 시작 메시지 (즉시 기록)
+            self.logger.info("애플리케이션 시작 - 로깅 시스템 초기화 완료")
+            
+            # 강제 flush
+            file_handler.flush()
+            
+            print("로깅 시스템 초기화 완료")
+            
+            # 로그 파일 내용 확인
+            if os.path.exists(log_filename):
+                file_size = os.path.getsize(log_filename)
+                print(f"로그 파일 생성 확인: {log_filename} (크기: {file_size} bytes)")
+            else:
+                print(f"로그 파일 생성 실패: {log_filename}")
+            
+        except Exception as e:
+            print(f"로깅 설정 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_setting_changed(self, *args):
+        """설정 변경 감지"""
+        self.settings_changed = True
+    
+    def validate_inputs(self):
+        """입력값 유효성 검사"""
+        watch_folder = self.watch_folder.get().strip()
+        credentials_path = self.credentials_path.get().strip()
+        docs_input_val = self.docs_input.get().strip()
+        
+        errors = []
+        
+        # 감시 폴더 검사
+        if not watch_folder:
+            errors.append("감시 폴더를 선택해주세요.")
+        elif not os.path.exists(watch_folder):
+            errors.append("감시 폴더가 존재하지 않습니다.")
+        elif not os.path.isdir(watch_folder):
+            errors.append("감시 폴더 경로가 폴더가 아닙니다.")
+        
+        # Credentials 파일 검사
+        if not credentials_path:
+            errors.append("Credentials 파일을 선택해주세요.")
+        elif not os.path.exists(credentials_path):
+            errors.append("Credentials 파일이 존재하지 않습니다.")
+        elif not os.path.isfile(credentials_path):
+            errors.append("Credentials 경로가 파일이 아닙니다.")
+        elif not credentials_path.lower().endswith('.json'):
+            errors.append("Credentials 파일은 JSON 형식이어야 합니다.")
+        
+        # Google Docs URL/ID 검사
+        if not docs_input_val:
+            errors.append("Google Docs URL 또는 ID를 입력해주세요.")
+        else:
+            docs_id = extract_google_id_from_url(docs_input_val)
+            if not docs_id:
+                errors.append("유효한 Google Docs URL 또는 ID를 입력해주세요.")
+        
+        return errors
+    
+    def open_folder_in_explorer(self, folder_path):
+        """폴더를 윈도우 탐색기에서 열기"""
+        try:
+            if os.path.exists(folder_path):
+                if platform.system() == "Windows":
+                    subprocess.run(["explorer", folder_path])
+                elif platform.system() == "Darwin":  # macOS
+                    subprocess.run(["open", folder_path])
+                else:  # Linux
+                    subprocess.run(["xdg-open", folder_path])
+                self.log(f"폴더 열기: {folder_path}")
+            else:
+                messagebox.showwarning("경고", "폴더가 존재하지 않습니다.", parent=self.root)
+        except Exception as e:
+            self.log(f"오류: 폴더 열기 실패 - {e}")
+            messagebox.showerror("오류", f"폴더 열기 실패:\n{e}", parent=self.root)
+    
+    def update_status(self, status_text):
+        """상태 표시 업데이트"""
+        self.status_var.set(status_text)
+        self.root.update_idletasks()
 
     def create_widgets(self):
-        # ... (위젯 생성 코드는 이전과 동일) ...
         main_frame = ctk.CTkFrame(self.root); main_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        
+        # 상태 표시 프레임
+        status_frame = ctk.CTkFrame(main_frame); status_frame.pack(pady=(0,10), padx=10, fill="x")
+        ctk.CTkLabel(status_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(10,5), pady=5)
+        self.status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
+        self.status_label.pack(side="left", padx=5, pady=5)
+        
         settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
         ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,10))
+        
+        # 감시 폴더 설정
         folder_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); folder_frame.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(folder_frame, text="감시 폴더:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(folder_frame, textvariable=self.watch_folder).pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkButton(folder_frame, text="폴더 선택...", width=100, command=self.browse_folder).pack(side="left")
+        ctk.CTkButton(folder_frame, text="폴더 선택...", width=80, command=self.browse_folder).pack(side="left", padx=(5,0))
+        ctk.CTkButton(folder_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(self.watch_folder.get())).pack(side="left", padx=(5,0))
+        
+        # Credentials 파일 설정
         cred_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); cred_frame.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(cred_frame, text="Credentials 파일:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(cred_frame, textvariable=self.credentials_path).pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkButton(cred_frame, text="파일 선택...", width=100, command=self.browse_credentials).pack(side="left")
+        ctk.CTkButton(cred_frame, text="파일 선택...", width=80, command=self.browse_credentials).pack(side="left", padx=(5,0))
+        ctk.CTkButton(cred_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(os.path.dirname(self.credentials_path.get()) if self.credentials_path.get() else "")).pack(side="left", padx=(5,0))
+        
+        # Google Docs URL/ID 설정
         docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
         ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
+        
+        # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
         self.start_button = ctk.CTkButton(control_frame, text="감시 시작", command=self.start_monitoring, width=120); self.start_button.pack(side="left", padx=10)
         self.stop_button = ctk.CTkButton(control_frame, text="감시 중지", command=self.stop_monitoring, width=120, state="disabled"); self.stop_button.pack(side="left", padx=10)
         ctk.CTkFrame(control_frame, fg_color="transparent").pack(side="left", fill="x", expand=True)
         ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
+        
+        # 로그 프레임
         log_frame = ctk.CTkFrame(main_frame); log_frame.pack(pady=10, padx=10, fill="both", expand=True); log_frame.configure(border_width=1)
         ctk.CTkLabel(log_frame, text="로그", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
@@ -198,7 +356,15 @@ class MessengerDocsApp:
             self.log("감시 스레드 중지 시도 완료.")
         self.is_monitoring = False # 확실히 상태 업데이트
 
-        # 3. 메인 창 종료 (모든 백그라운드 작업 정리 후)
+        # 3. 설정 자동 저장 (변경사항이 있는 경우)
+        if hasattr(self, 'settings_changed') and self.settings_changed:
+            try:
+                self.save_config()
+                self.log("종료 시 설정 자동 저장 완료.")
+            except Exception as e:
+                self.log(f"종료 시 설정 저장 실패: {e}")
+        
+        # 4. 메인 창 종료 (모든 백그라운드 작업 정리 후)
         self.log("메인 창 종료 시도...")
         # root.after를 사용하여 메인 루프에서 안전하게 destroy 호출 시도
         if hasattr(self, 'root') and self.root:
@@ -225,8 +391,13 @@ class MessengerDocsApp:
         if filepath: self.credentials_path.set(filepath); self.log(f"Credentials 파일: {filepath}")
     def log(self, message):
         try:
+            # GUI 로그 출력
             if self.root.winfo_exists():
                 self.log_text.configure(state='normal'); self.log_text.insert(ctk.END, message + '\n'); self.log_text.configure(state='disabled'); self.log_text.see(ctk.END)
+            
+            # 파일 로그 출력
+            if hasattr(self, 'logger'):
+                self.logger.info(message)
         except Exception: pass
     def log_threadsafe(self, message): self.log_queue.put(message)
     def process_log_queue(self):
@@ -234,11 +405,27 @@ class MessengerDocsApp:
             while True:
                 msg = self.log_queue.get_nowait()
                 self.log(msg)
+                
+                # 상태 메시지에 따른 상태 표시 업데이트
+                if "백엔드: 감시 시작" in msg:
+                    self.update_status("감시 중")
+                elif "백엔드: 중지 신호 수신" in msg or "백엔드: 모든 작업 완료" in msg:
+                    self.update_status("중지됨")
+                elif "처리 시작:" in msg:
+                    filename = msg.split("처리 시작:")[-1].strip()
+                    self.update_status(f"처리 중: {filename}")
+                elif "처리 완료:" in msg:
+                    self.update_status("감시 중")
+                elif "Google Docs 업데이트 완료" in msg:
+                    self.update_status("업데이트 완료")
+                    # 잠시 후 다시 감시 중 상태로 변경
+                    self.root.after(2000, lambda: self.update_status("감시 중") if self.is_monitoring else None)
+                
                 # 감시 실패 메시지 감지 시 팝업 표시
-                if "감시 실패" in msg or "오류" in msg or "실패" in msg:
-                    # 이미 팝업이 뜬 경우 중복 방지 등은 필요에 따라 추가
+                if "감시 실패" in msg or ("오류" in msg and "Google" in msg):
                     try:
                         messagebox.showerror("감시 실패", msg, parent=self.root)
+                        self.update_status("오류 발생")
                     except Exception:
                         pass
         except queue.Empty:
@@ -263,20 +450,53 @@ class MessengerDocsApp:
             except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
         else: self.log("저장된 설정 파일 없음.")
     def start_monitoring(self):
-        if not run_monitoring: messagebox.showerror("실행 오류", "백엔드 모듈 로드 불가.", parent=self.root); return
-        watch_folder = self.watch_folder.get(); credentials_path = self.credentials_path.get(); docs_input_val = self.docs_input.get()
-        if not watch_folder or not os.path.isdir(watch_folder): messagebox.showerror("입력 오류", "유효한 감시 폴더 지정 필요.", parent=self.root); return
-        if not credentials_path or not os.path.isfile(credentials_path): messagebox.showerror("입력 오류", "유효한 Credentials 파일 지정 필요.", parent=self.root); return
+        if not run_monitoring: 
+            messagebox.showerror("실행 오류", "백엔드 모듈 로드 불가.", parent=self.root)
+            return
+        
+        # 입력값 유효성 검사
+        self.update_status("입력값 검증 중...")
+        validation_errors = self.validate_inputs()
+        if validation_errors:
+            error_message = "\n".join([f"• {error}" for error in validation_errors])
+            messagebox.showerror("입력 오류", f"다음 문제를 해결해주세요:\n\n{error_message}", parent=self.root)
+            self.update_status("준비")
+            return
+        
+        watch_folder = self.watch_folder.get().strip()
+        credentials_path = self.credentials_path.get().strip()
+        docs_input_val = self.docs_input.get().strip()
         docs_id = extract_google_id_from_url(docs_input_val)
-        if not docs_id: messagebox.showerror("입력 오류", "유효한 Google Docs URL/ID 입력 필요.", parent=self.root); return
-        self.log(f"처리할 Docs ID: {docs_id}"); self.log("감시 시작 요청..."); self.is_monitoring = True; self.stop_event.clear()
-        current_config = { "watch_folder": watch_folder, "credentials_path": credentials_path, "docs_id": docs_id }
-        self.monitoring_thread = threading.Thread(target=run_monitoring, args=(current_config, self.log_threadsafe, self.stop_event), daemon=True)
+        
+        self.log(f"처리할 Docs ID: {docs_id}")
+        self.log("감시 시작 요청...")
+        self.update_status("감시 시작 중...")
+        
+        self.is_monitoring = True
+        self.stop_event.clear()
+        
+        current_config = { 
+            "watch_folder": watch_folder, 
+            "credentials_path": credentials_path, 
+            "docs_id": docs_id 
+        }
+        
+        self.monitoring_thread = threading.Thread(
+            target=run_monitoring, 
+            args=(current_config, self.log_threadsafe, self.stop_event), 
+            daemon=True
+        )
         self.monitoring_thread.start()
-        self.start_button.configure(state="disabled"); self.stop_button.configure(state="normal"); self.disable_settings_widgets(); self.log("백그라운드 감시 시작됨.")
+        
+        self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.disable_settings_widgets()
+        self.update_status("감시 중")
+        self.log("백그라운드 감시 시작됨.")
     def stop_monitoring(self):
         if self.is_monitoring and self.monitoring_thread and self.monitoring_thread.is_alive():
             self.log("감시 중지 요청...")
+            self.update_status("감시 중지 중...")
             self.stop_event.set()
             self.stop_button.configure(state="disabled")
             # 스레드가 종료될 때까지 기다린 후 상태 복구
@@ -288,9 +508,15 @@ class MessengerDocsApp:
             self.log("현재 감시 중 아님.")
             self.on_monitoring_stopped()
     def on_monitoring_stopped(self):
-         self.is_monitoring = False; self.monitoring_thread = None
+         self.is_monitoring = False
+         self.monitoring_thread = None
          if hasattr(self, 'root') and self.root.winfo_exists():
-             try: self.start_button.configure(state="normal"); self.stop_button.configure(state="disabled"); self.enable_settings_widgets(); self.log("감시 중지됨.")
+             try: 
+                 self.start_button.configure(state="normal")
+                 self.stop_button.configure(state="disabled")
+                 self.enable_settings_widgets()
+                 self.update_status("준비")
+                 self.log("감시 중지됨.")
              except Exception: pass # 위젯 파괴 후 예외 무시
     def disable_settings_widgets(self):
         try:
