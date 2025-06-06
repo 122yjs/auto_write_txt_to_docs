@@ -237,17 +237,33 @@ class MessengerDocsApp:
     
     def open_folder_in_explorer(self, folder_path):
         """폴더를 윈도우 탐색기에서 열기"""
+        self.log(f"open_folder_in_explorer 호출됨. 전달된 경로: {folder_path}")
+        
+        # 경로가 비어있는 경우 처리
+        if not folder_path or folder_path.strip() == "":
+            self.log("경고: 빈 경로가 전달됨")
+            messagebox.showwarning("경고", "폴더 경로가 설정되지 않았습니다.", parent=self.root)
+            return
+            
+        # 경로 정규화
+        normalized_path = os.path.normpath(folder_path)
+        self.log(f"정규화된 경로: {normalized_path}")
+        
         try:
-            if os.path.exists(folder_path):
+            if os.path.exists(normalized_path):
                 if platform.system() == "Windows":
-                    subprocess.run(["explorer", folder_path])
+                    # Windows에서는 경로를 절대경로로 변환
+                    abs_path = os.path.abspath(normalized_path)
+                    self.log(f"절대경로로 변환: {abs_path}")
+                    subprocess.run(["explorer", abs_path])
                 elif platform.system() == "Darwin":  # macOS
-                    subprocess.run(["open", folder_path])
+                    subprocess.run(["open", normalized_path])
                 else:  # Linux
-                    subprocess.run(["xdg-open", folder_path])
-                self.log(f"폴더 열기: {folder_path}")
+                    subprocess.run(["xdg-open", normalized_path])
+                self.log(f"폴더 열기 성공: {normalized_path}")
             else:
-                messagebox.showwarning("경고", "폴더가 존재하지 않습니다.", parent=self.root)
+                self.log(f"경고: 폴더가 존재하지 않음 - {normalized_path}")
+                messagebox.showwarning("경고", f"폴더가 존재하지 않습니다:\n{normalized_path}", parent=self.root)
         except Exception as e:
             self.log(f"오류: 폴더 열기 실패 - {e}")
             messagebox.showerror("오류", f"폴더 열기 실패:\n{e}", parent=self.root)
