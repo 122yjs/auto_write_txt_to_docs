@@ -20,16 +20,17 @@ import pystray
 # backend_processor 임포트
 try:
     # Docs 기록 기능 버전의 backend_processor 임포트
-    from src.backend_processor import run_monitoring
+    from src.auto_write_txt_to_docs.backend_processor import run_monitoring
 except ImportError:
     messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
     run_monitoring = None # 함수 부재 처리
 
 # --- 기본 설정 ---
-# 현재 파일(main_gui.py)의 디렉토리 -> src
-# src의 부모 디렉토리 -> 프로젝트 루트
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
+# 안전한 경로 설정 (배포 환경 지원)
+from src.auto_write_txt_to_docs.path_utils import PROJECT_ROOT_STR, CONFIG_FILE_STR
+
+PROJECT_ROOT = PROJECT_ROOT_STR
+CONFIG_FILE = CONFIG_FILE_STR
 # ICON_PATH = "icon.png" # 더 이상 필요 없음
 
 # --- Helper Function: URL에서 ID 추출 ---
