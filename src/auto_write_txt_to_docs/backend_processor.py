@@ -14,7 +14,7 @@ from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유
 
 # google_auth 모듈 임포트
 try:
-    from src.google_auth import get_google_services
+    from .google_auth import get_google_services
 except ImportError:
     print("오류: google_auth.py 모듈을 찾을 수 없습니다. Google API 인증 기능이 작동하지 않습니다.")
     get_google_services = None
@@ -38,7 +38,7 @@ def setup_backend_logging():
     # PROJECT_ROOT는 파일 하단에 정의되어 있음 (CACHE_FILE 설정 시)
     # 해당 정의를 이곳에서도 활용하거나, 여기서 다시 정의할 수 있습니다.
     # 간결성을 위해 여기서 PROJECT_ROOT를 다시 정의합니다.
-    project_root_for_log = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root_for_log = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     logs_dir = os.path.join(project_root_for_log, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
     
@@ -59,10 +59,11 @@ def setup_backend_logging():
 
 # 라인 캐시 관련 설정
 added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
-# 현재 파일(backend_processor.py)의 디렉토리 -> src
-# src의 부모 디렉토리 -> 프로젝트 루트
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE_FILE = os.path.join(PROJECT_ROOT, "added_lines_cache.json") # 라인 캐시 파일명
+# 안전한 경로 설정 (배포 환경 지원)
+from .path_utils import PROJECT_ROOT_STR, CACHE_FILE_STR
+
+PROJECT_ROOT = PROJECT_ROOT_STR
+CACHE_FILE = CACHE_FILE_STR # 라인 캐시 파일명
 
 # --- 캐시 관리 함수 (라인 캐시 전용) ---
 def load_line_cache(log_func):
