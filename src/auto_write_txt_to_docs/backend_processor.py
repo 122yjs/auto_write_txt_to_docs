@@ -59,11 +59,10 @@ def setup_backend_logging():
 
 # 라인 캐시 관련 설정
 added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
-# 안전한 경로 설정 (배포 환경 지원)
-from .path_utils import PROJECT_ROOT_STR, CACHE_FILE_STR
-
-PROJECT_ROOT = PROJECT_ROOT_STR
-CACHE_FILE = CACHE_FILE_STR # 라인 캐시 파일명
+# 현재 파일(backend_processor.py)의 디렉토리 -> src/auto_write_txt_to_docs
+# src/auto_write_txt_to_docs의 부모의 부모 디렉토리 -> 프로젝트 루트
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CACHE_FILE = os.path.join(PROJECT_ROOT, "added_lines_cache.json") # 라인 캐시 파일명
 
 # --- 캐시 관리 함수 (라인 캐시 전용) ---
 def load_line_cache(log_func):
@@ -266,12 +265,12 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
 
     google_services = None
     # Google API 서비스 로드 (Docs만 필수)
-    if get_google_services and credentials_path and os.path.exists(credentials_path):
+    if get_google_services:
         try:
             # get_google_services는 내부적으로 필요한 모든 서비스(Docs 포함)를 로드 시도할 수 있음
-            # 또는 Docs 서비스만 로드하도록 google_auth.py 수정 가능
+            # path_utils에서 자동으로 credentials 경로를 찾아서 사용
             backend_logger.info("Google API 서비스 로드 시도")
-            google_services = get_google_services(credentials_path, log_func_threadsafe)
+            google_services = get_google_services(log_func_threadsafe)
             if google_services and 'docs' in google_services:
                 log_func_threadsafe("백엔드: Google Docs 서비스 로드 완료.")
                 backend_logger.info("Google Docs 서비스 로드 완료")
