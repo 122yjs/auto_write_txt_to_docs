@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto_write"
+version = "0.1.0"
+authors = [
+  { name="Your Name", email="you@example.com" },
+]
+description = "A small example package"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "customtkinter",
+    "pystray",
+    "Pillow",
+    "watchdog",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/auto_write"
+"Bug Tracker" = "https://github.com/yourusername/auto_write/issues"
+
+[project.scripts]
+auto_write_gui = "src.main_gui:main"  # main_gui.py에 main 함수가 있다고 가정
