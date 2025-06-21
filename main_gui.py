@@ -427,7 +427,17 @@ class MessengerDocsApp:
         docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
         ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkButton(docs_frame, text="웹에서 열기", width=80, command=self.open_docs_in_browser).pack(side="left", padx=(5,0))
+        
+        # 웹에서 열기 버튼 (아이콘 추가 및 스타일 개선)
+        docs_button = ctk.CTkButton(
+            docs_frame, 
+            text="문서 열기", 
+            width=80, 
+            command=self.open_docs_in_browser,
+            fg_color="#4285F4",  # Google 파란색
+            hover_color="#3367D6"  # 어두운 파란색
+        )
+        docs_button.pack(side="left", padx=(5,0))
         
         # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
@@ -462,7 +472,25 @@ class MessengerDocsApp:
             width=100,
             command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs"))
         )
-        self.log_folder_button.pack(side="right", padx=(0,0)) # 오른쪽 정렬
+        self.log_folder_button.pack(side="right", padx=(5,0)) # 오른쪽 정렬
+        
+        # 로그 검색 버튼 추가
+        self.log_search_button = ctk.CTkButton(
+            log_header_frame,
+            text="로그 검색",
+            width=80,
+            command=self.show_log_search_dialog
+        )
+        self.log_search_button.pack(side="right", padx=5) # 오른쪽 정렬
+        
+        # 로그 지우기 버튼 추가
+        self.log_clear_button = ctk.CTkButton(
+            log_header_frame,
+            text="로그 지우기",
+            width=80,
+            command=self.clear_log
+        )
+        self.log_clear_button.pack(side="right", padx=5) # 오른쪽 정렬
 
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
@@ -479,6 +507,18 @@ class MessengerDocsApp:
             self.tray_thread = threading.Thread(target=self.run_tray_icon, daemon=True)
             self.tray_thread.start()
             self.log("트레이 아이콘 스레드 시작됨.")
+            
+    def show_tray_notification(self, title, message):
+        """트레이 아이콘에 알림 표시"""
+        if self.tray_icon and hasattr(self.tray_icon, 'notify'):
+            try:
+                # 트레이 아이콘이 실행 중이고 notify 메서드가 있는 경우
+                self.tray_icon.notify(title, message)
+                self.log(f"트레이 알림 표시: {title}")
+            except Exception as e:
+                self.log(f"트레이 알림 표시 실패: {e}")
+        else:
+            self.log("트레이 아이콘이 초기화되지 않아 알림을 표시할 수 없습니다.")
 
     def hide_window(self): # X 버튼 클릭 시 호출됨
         """ 메인 창 숨기기 """
@@ -586,6 +626,21 @@ class MessengerDocsApp:
                     # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
                     if self.is_monitoring:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
+                    
+                    # 트레이 알림 표시
+                    if "줄 추가" in msg:
+                        try:
+                            # 추가된 줄 수 추출
+                            import re
+                            match = re.search(r'(\d+)줄 추가', msg)
+                            lines_count = match.group(1) if match else "새로운"
+                            
+                            # 알림 표시
+                            notification_title = "메신저 Docs 자동 기록"
+                            notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
+                            self.show_tray_notification(notification_title, notification_message)
+                        except Exception as e:
+                            self.log(f"알림 처리 중 오류: {e}")
                 
                 # 오류 메시지 처리 강화
                 error_detail = None
@@ -836,6 +891,267 @@ class MessengerDocsApp:
         x = (help_window.winfo_screenwidth() // 2) - (width // 2)
         y = (help_window.winfo_screenheight() // 2) - (height // 2)
         help_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def show_enhanced_error_dialog(self, error_type, error_message):
+        """
+        개선된 오류 대화 상자를 표시합니다.
+        오류 유형에 따라 단계별 해결 방법을 제공합니다.
+        """
+        error_window = ctk.CTkToplevel(self.root)
+        error_window.title("오류 발생")
+        error_window.geometry("600x450")
+        error_window.transient(self.root)  # 부모 창 위에 표시
+        error_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(error_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 오류 아이콘 및 제목
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        # 오류 제목
+        title_label = ctk.CTkLabel(
+            header_frame, 
+            text=f"오류 발생: {error_type}", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#FF5252"  # 빨간색
+        )
+        title_label.pack(pady=(0, 5))
+        
+        # 구분선
+        separator = ctk.CTkFrame(main_frame, height=2, fg_color="#CCCCCC")
+        separator.pack(fill="x", pady=(0, 15))
+        
+        # 오류 내용 프레임
+        content_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True)
+        
+        # 오류 메시지
+        error_label = ctk.CTkLabel(
+            content_frame,
+            text="오류 내용:",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        error_label.pack(fill="x", anchor="w")
+        
+        # 오류 메시지 텍스트 박스
+        error_text = ctk.CTkTextbox(content_frame, height=80)
+        error_text.pack(fill="x", pady=(5, 15))
+        error_text.insert("1.0", error_message)
+        error_text.configure(state="disabled")  # 읽기 전용
+        
+        # 해결 방법 제목
+        solution_label = ctk.CTkLabel(
+            content_frame,
+            text="해결 방법:",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        solution_label.pack(fill="x", anchor="w")
+        
+        # 해결 방법 텍스트 박스
+        solution_text = ctk.CTkTextbox(content_frame, height=150)
+        solution_text.pack(fill="both", expand=True, pady=(5, 15))
+        
+        # 오류 유형에 따른 해결 방법
+        solution = ""
+        if "Google 인증 오류" in error_type:
+            solution = """1. 인터넷 연결 상태를 확인하세요.
+2. 'developer_credentials.json' 파일이 올바른 위치에 있는지 확인하세요.
+3. Google 계정에 로그인이 되어 있는지 확인하세요.
+4. 브라우저에서 Google 계정에 로그인한 후 다시 시도하세요.
+5. 토큰이 만료되었다면, 프로그램을 재시작하여 새로운 인증을 시도하세요.
+6. 계속 문제가 발생한다면, 'token.json' 파일을 삭제하고 다시 시도하세요."""
+        elif "Docs API 오류" in error_type:
+            solution = """1. Google Docs 문서 ID가 올바른지 확인하세요.
+2. 해당 Google Docs 문서에 대한 편집 권한이 있는지 확인하세요.
+3. Google API 할당량이 초과되었을 수 있습니다. 잠시 후 다시 시도하세요.
+4. 인터넷 연결 상태를 확인하세요.
+5. 브라우저에서 해당 문서에 직접 접근이 가능한지 확인하세요."""
+        elif "파일 접근 오류" in error_type:
+            solution = """1. 감시 중인 폴더가 존재하는지 확인하세요.
+2. 폴더에 대한 읽기 권한이 있는지 확인하세요.
+3. 다른 프로그램이 파일을 사용 중인지 확인하세요.
+4. 파일이 이동되거나 삭제되었을 수 있습니다. 파일 존재 여부를 확인하세요.
+5. 파일 경로에 특수 문자가 포함되어 있는지 확인하세요."""
+        elif "감시 시스템 오류" in error_type:
+            solution = """1. 감시 폴더가 올바르게 설정되었는지 확인하세요.
+2. 폴더 경로가 너무 길거나 특수 문자를 포함하고 있는지 확인하세요.
+3. 프로그램을 재시작하여 감시 시스템을 초기화하세요.
+4. 시스템 리소스(메모리, CPU)가 부족하지 않은지 확인하세요."""
+        else:
+            solution = """1. 인터넷 연결 상태를 확인하세요.
+2. 프로그램 설정이 올바른지 확인하세요.
+3. 프로그램을 재시작하여 다시 시도하세요.
+4. 오류가 계속되면 로그 파일을 확인하여 더 자세한 정보를 얻으세요.
+5. 필요한 경우 개발자에게 문의하세요."""
+        
+        solution_text.insert("1.0", solution)
+        solution_text.configure(state="disabled")  # 읽기 전용
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 로그 보기 버튼
+        log_button = ctk.CTkButton(
+            button_frame,
+            text="로그 폴더 열기",
+            command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs")),
+            width=120
+        )
+        log_button.pack(side="left", padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            button_frame,
+            text="닫기",
+            command=error_window.destroy,
+            width=120
+        )
+        close_button.pack(side="right", padx=10)
+        
+        # 창 중앙 배치
+        error_window.update_idletasks()
+        width = error_window.winfo_width()
+        height = error_window.winfo_height()
+        x = (error_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (error_window.winfo_screenheight() // 2) - (height // 2)
+        error_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def clear_log(self):
+        """로그 텍스트 지우기"""
+        try:
+            self.log_text.configure(state='normal')
+            self.log_text.delete("1.0", ctk.END)
+            self.log_text.configure(state='disabled')
+            self.log("로그 내용을 지웠습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"로그 지우기 실패: {e}", parent=self.root)
+    
+    def show_log_search_dialog(self):
+        """로그 검색 대화 상자 표시"""
+        search_window = ctk.CTkToplevel(self.root)
+        search_window.title("로그 검색")
+        search_window.geometry("400x150")
+        search_window.transient(self.root)  # 부모 창 위에 표시
+        search_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(search_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 검색어 입력
+        search_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        search_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(search_frame, text="검색어:").pack(side="left", padx=(0, 10))
+        search_var = ctk.StringVar()
+        search_entry = ctk.CTkEntry(search_frame, textvariable=search_var, width=250)
+        search_entry.pack(side="left", fill="x", expand=True)
+        search_entry.focus_set()  # 포커스 설정
+        
+        # 검색 옵션
+        options_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        options_frame.pack(fill="x", pady=(0, 15))
+        
+        case_sensitive_var = ctk.BooleanVar(value=False)
+        case_sensitive_check = ctk.CTkCheckBox(
+            options_frame, 
+            text="대소문자 구분", 
+            variable=case_sensitive_var
+        )
+        case_sensitive_check.pack(side="left", padx=(0, 15))
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(0, 0))
+        
+        # 검색 함수
+        def search_log():
+            search_text = search_var.get()
+            if not search_text:
+                messagebox.showinfo("알림", "검색어를 입력하세요.", parent=search_window)
+                return
+            
+            self.log_text.tag_remove("search", "1.0", ctk.END)  # 기존 검색 결과 제거
+            
+            # 대소문자 구분 옵션
+            if case_sensitive_var.get():
+                search_text = search_text  # 그대로 사용
+            else:
+                search_text = search_text.lower()  # 소문자로 변환
+            
+            self.log_text.configure(state='normal')
+            
+            # 검색 시작
+            start_pos = "1.0"
+            found_count = 0
+            
+            while True:
+                if not case_sensitive_var.get():
+                    # 대소문자 구분 없이 검색
+                    current_text = self.log_text.get("1.0", ctk.END).lower()
+                    pos = current_text.find(search_text, self.log_text.index(start_pos).split('.')[0])
+                else:
+                    # 대소문자 구분하여 검색
+                    pos = self.log_text.search(search_text, start_pos, stopindex=ctk.END)
+                
+                if not pos:
+                    break
+                
+                line, char = pos.split('.')
+                end_pos = f"{line}.{int(char) + len(search_text)}"
+                
+                # 검색 결과 강조 표시
+                self.log_text.tag_add("search", pos, end_pos)
+                self.log_text.tag_config("search", background="yellow", foreground="black")
+                
+                # 다음 검색 위치 설정
+                start_pos = end_pos
+                found_count += 1
+            
+            self.log_text.configure(state='disabled')
+            
+            # 검색 결과 표시
+            if found_count > 0:
+                messagebox.showinfo("검색 결과", f"{found_count}개의 결과를 찾았습니다.", parent=search_window)
+                # 첫 번째 검색 결과로 스크롤
+                self.log_text.see("search.first")
+            else:
+                messagebox.showinfo("검색 결과", "검색 결과가 없습니다.", parent=search_window)
+        
+        # 검색 버튼
+        search_button = ctk.CTkButton(
+            button_frame,
+            text="검색",
+            command=search_log,
+            width=100
+        )
+        search_button.pack(side="left", padx=(0, 10))
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            button_frame,
+            text="닫기",
+            command=search_window.destroy,
+            width=100
+        )
+        close_button.pack(side="right")
+        
+        # 엔터 키로 검색 실행
+        search_window.bind("<Return>", lambda event: search_log())
+        
+        # 창 중앙 배치
+        search_window.update_idletasks()
+        width = search_window.winfo_width()
+        height = search_window.winfo_height()
+        x = (search_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (search_window.winfo_screenheight() // 2) - (height // 2)
+        search_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
