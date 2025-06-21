@@ -1,7 +1,7 @@
 # main_gui.py (아이콘 생성 + Docs 기록 + 트레이 기능 버전)
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, scrolledtext
 import os
 import json
 import threading
@@ -11,6 +11,7 @@ import time
 import subprocess
 import platform
 import logging
+import webbrowser
 from datetime import datetime
 
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
@@ -305,6 +306,34 @@ class MessengerDocsApp:
         except Exception as e:
             self.log(f"오류: 폴더 열기 실패 - {e}")
             messagebox.showerror("오류", f"폴더 열기 실패:\n{e}", parent=self.root)
+            
+    def open_docs_in_browser(self):
+        """Google Docs 문서를 웹브라우저에서 열기"""
+        docs_input_val = self.docs_input.get().strip()
+        
+        if not docs_input_val:
+            self.log("경고: Google Docs URL/ID가 설정되지 않았습니다.")
+            messagebox.showwarning("경고", "Google Docs URL 또는 ID를 먼저 입력해주세요.", parent=self.root)
+            return
+            
+        # URL인지 ID인지 확인
+        docs_id = extract_google_id_from_url(docs_input_val)
+        
+        if not docs_id:
+            self.log("경고: 유효한 Google Docs URL/ID가 아닙니다.")
+            messagebox.showwarning("경고", "유효한 Google Docs URL 또는 ID를 입력해주세요.", parent=self.root)
+            return
+            
+        # Google Docs URL 형식으로 변환
+        docs_url = f"https://docs.google.com/document/d/{docs_id}/edit"
+        
+        try:
+            # 웹브라우저 열기
+            webbrowser.open(docs_url)
+            self.log(f"Google Docs 문서 열기 성공: {docs_url}")
+        except Exception as e:
+            self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
+            messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
     
     def update_status(self, status_text, detail_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
@@ -351,11 +380,24 @@ class MessengerDocsApp:
         docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
         ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
+        ctk.CTkButton(docs_frame, text="웹에서 열기", width=80, command=self.open_docs_in_browser).pack(side="left", padx=(5,0))
         
         # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
         self.start_button = ctk.CTkButton(control_frame, text="감시 시작", command=self.start_monitoring, width=120); self.start_button.pack(side="left", padx=10)
         self.stop_button = ctk.CTkButton(control_frame, text="감시 중지", command=self.stop_monitoring, width=120, state="disabled"); self.stop_button.pack(side="left", padx=10)
+        
+        # 웹에서 열기 버튼 (제어 프레임에도 추가)
+        self.open_docs_button = ctk.CTkButton(
+            control_frame, 
+            text="Docs 웹에서 열기", 
+            command=self.open_docs_in_browser, 
+            width=120,
+            fg_color="#4285F4",  # Google 파란색
+            hover_color="#3367D6"  # 어두운 파란색
+        )
+        self.open_docs_button.pack(side="left", padx=10)
+        
         ctk.CTkFrame(control_frame, fg_color="transparent").pack(side="left", fill="x", expand=True)
         ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
         
@@ -617,7 +659,11 @@ class MessengerDocsApp:
             for child in settings_frame.winfo_children():
                  if isinstance(child, ctk.CTkFrame):
                       for widget in child.winfo_children():
-                           if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="disabled")
+                           # "웹에서 열기" 버튼은 항상 활성화 상태로 유지
+                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "웹에서 열기":
+                               continue
+                           elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                               widget.configure(state="disabled")
         except (IndexError, AttributeError): pass # 위젯 구조 변경 또는 창 파괴 시 오류 무시
     def enable_settings_widgets(self):
         try:

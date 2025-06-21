@@ -22,6 +22,7 @@ except ImportError:
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
 processed_file_states = {} # 파일별 마지막 처리 상태 (크기, 시간) - 메모리 기반
+file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 
 # 로깅 설정
@@ -99,24 +100,48 @@ def save_line_cache(log_func):
 def read_file_with_multiple_encodings(filepath, start_offset, log_func):
     """ 파일을 여러 인코딩으로 읽기 시도하여 성공하는 내용을 반환 """
     backend_logger = logging.getLogger('backend_processor')
-    encodings = ['utf-8', 'cp949', 'utf-8-sig', 'euc-kr'] # 시도할 인코딩 목록
+    
+    # 기본 인코딩 목록
+    default_encodings = ['utf-8', 'cp949', 'utf-8-sig', 'euc-kr']
+    
+    # 이전에 성공한 인코딩이 있으면 먼저 시도
+    if filepath in file_encodings:
+        known_encoding = file_encodings[filepath]
+        encodings = [known_encoding] + [enc for enc in default_encodings if enc != known_encoding]
+        backend_logger.debug(f"파일 '{os.path.basename(filepath)}'에 이전 성공 인코딩 사용: {known_encoding}")
+    else:
+        encodings = default_encodings
+    
     content = None
+    successful_encoding = None
+    
     for enc in encodings:
         try:
             with open(filepath, 'r', encoding=enc) as f:
                 if start_offset > 0:
                     file_size = os.path.getsize(filepath) # 파일 끝 넘어가지 않도록 확인
-                    if start_offset >= file_size: content = ""; break
+                    if start_offset >= file_size: 
+                        content = ""
+                        successful_encoding = enc
+                        break
                     f.seek(start_offset)
                 content = f.read()
             backend_logger.debug(f"파일 읽기 성공 ({enc}): {os.path.basename(filepath)}")
+            successful_encoding = enc
             break # 읽기 성공 시 종료
         except (UnicodeDecodeError, FileNotFoundError, OSError, Exception) as e:
             backend_logger.debug(f"인코딩 {enc} 실패: {e}")
             continue # 실패 시 다음 인코딩 시도
+    
+    # 성공한 인코딩 저장
+    if successful_encoding:
+        file_encodings[filepath] = successful_encoding
+        backend_logger.debug(f"파일 '{os.path.basename(filepath)}'의 인코딩으로 {successful_encoding} 저장됨")
+    
     if content is None:
         log_func(f"오류: 파일 '{os.path.basename(filepath)}' 읽기 최종 실패.")
         backend_logger.error(f"파일 읽기 최종 실패: {filepath}")
+    
     return content
 
 # --- 파일 변경 이벤트 핸들러 ---
@@ -164,6 +189,10 @@ def process_file(filepath, config, services, log_func):
             new_raw_content = read_file_with_multiple_encodings(filepath, last_size, log_func)
         elif current_size < last_size:
             log_func(f"  - 파일 크기 감소 감지. 전체 내용 다시 읽기...")
+            # 파일이 다시 작성되었을 가능성이 있으므로 인코딩 정보 초기화
+            if filepath in file_encodings:
+                backend_logger.info(f"파일 크기 감소로 인해 '{os.path.basename(filepath)}'의 인코딩 정보 초기화")
+                del file_encodings[filepath]
             new_raw_content = read_file_with_multiple_encodings(filepath, 0, log_func)
             last_size = 0 # 크기 감소 시, 다음번 비교 위해 last_size 초기화
         else: # 크기 변경 없음
@@ -243,6 +272,7 @@ def process_file(filepath, config, services, log_func):
          log_func(f"오류: 파일 처리 중 사라짐 - {os.path.basename(filepath)}")
          backend_logger.warning(f"파일 처리 중 사라짐: {filepath}")
          if filepath in processed_file_states: del processed_file_states[filepath] # 상태 정보 제거
+         if filepath in file_encodings: del file_encodings[filepath] # 인코딩 정보 제거
     except Exception as e:
         log_func(f"오류: {os.path.basename(filepath)} 처리 중 예기치 않은 예외 - {e}")
         backend_logger.error(f"파일 처리 중 예기치 않은 예외: {filepath} - {e}", exc_info=True)
