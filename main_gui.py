@@ -660,7 +660,7 @@ class MessengerDocsApp:
                  if isinstance(child, ctk.CTkFrame):
                       for widget in child.winfo_children():
                            # "웹에서 열기" 버튼은 항상 활성화 상태로 유지
-                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "웹에서 열기":
+                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") in ["웹에서 열기", "Docs 웹에서 열기"]:
                                continue
                            elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
                                widget.configure(state="disabled")
