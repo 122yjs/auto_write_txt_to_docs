@@ -145,18 +145,72 @@ def read_file_with_multiple_encodings(filepath, start_offset, log_func):
     return content
 
 # --- 파일 변경 이벤트 핸들러 ---
-class TxtFileEventHandler(FileSystemEventHandler):
-    """ .txt 파일의 생성 또는 수정 이벤트만 감지하여 큐에 넣음 """
-    def __init__(self, log_func):
+class FileEventHandler(FileSystemEventHandler):
+    """ 설정된 필터에 맞는 파일의 생성 또는 수정 이벤트만 감지하여 큐에 넣음 """
+    def __init__(self, log_func, config):
         super().__init__()
         self.log_func = log_func
         self.backend_logger = logging.getLogger('backend_processor')
+        self.config = config
+        
+        # 파일 필터링 설정 가져오기
+        self.file_extensions = [ext.strip().lower() for ext in config.get('file_extensions', '.txt').split(',') if ext.strip()]
+        self.use_regex_filter = config.get('use_regex_filter', False)
+        self.regex_pattern = config.get('regex_pattern', '')
+        
+        # 정규식 컴파일 (사용하는 경우)
+        self.regex = None
+        if self.use_regex_filter and self.regex_pattern:
+            try:
+                import re
+                self.regex = re.compile(self.regex_pattern)
+                self.log_func(f"정규식 패턴 컴파일 완료: {self.regex_pattern}")
+            except re.error as e:
+                self.log_func(f"정규식 패턴 오류: {e}. 정규식 필터가 비활성화됩니다.")
+                self.backend_logger.error(f"정규식 패턴 컴파일 오류: {e}")
+                self.use_regex_filter = False
+        
+        # 로그 출력
+        if self.file_extensions:
+            self.log_func(f"파일 확장자 필터 설정됨: {', '.join(self.file_extensions)}")
+        else:
+            self.log_func("파일 확장자 필터 없음: 모든 파일이 감시됩니다.")
+            
+        if self.use_regex_filter and self.regex:
+            self.log_func(f"정규식 필터 활성화: {self.regex_pattern}")
+    
+    def is_file_match(self, filepath):
+        """파일이 필터 조건에 맞는지 확인"""
+        filename = os.path.basename(filepath)
+        
+        # 확장자 필터 확인
+        if self.file_extensions:
+            ext_match = any(filepath.lower().endswith(ext) for ext in self.file_extensions)
+            if not ext_match:
+                return False
+        
+        # 정규식 필터 확인
+        if self.use_regex_filter and self.regex:
+            if not self.regex.search(filename):
+                return False
+        
+        return True
+    
     def process(self, event):
-        if event.is_directory or not event.src_path.lower().endswith('.txt'): return
+        if event.is_directory: 
+            return
+            
         filepath = os.path.abspath(event.src_path)
+        
+        # 파일이 필터 조건에 맞는지 확인
+        if not self.is_file_match(filepath):
+            self.backend_logger.debug(f"필터링됨: {filepath}")
+            return
+            
         self.log_func(f"파일 감지됨 ({event.event_type}): {os.path.basename(filepath)}")
         self.backend_logger.info(f"파일 감지됨 ({event.event_type}): {filepath}")
         file_queue.put(filepath) # 처리 큐에 파일 경로 추가
+        
     def on_created(self, event): self.process(event)
     def on_modified(self, event): self.process(event)
 
@@ -333,7 +387,14 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
         backend_logger.warning("Docs ID는 있으나 Docs 서비스 연결 불가. 기록 비활성화.")
 
 
-    event_handler = TxtFileEventHandler(log_func_threadsafe)
+    # 파일 필터링 설정 로그
+    if 'file_extensions' in config:
+        log_func_threadsafe(f"백엔드: 파일 확장자 필터 - {config.get('file_extensions')}")
+    if config.get('use_regex_filter') and config.get('regex_pattern'):
+        log_func_threadsafe(f"백엔드: 정규식 필터 - {config.get('regex_pattern')}")
+    
+    # 이벤트 핸들러 생성 (필터링 설정 포함)
+    event_handler = FileEventHandler(log_func_threadsafe, config)
     observer = Observer()
     try:
         observer.schedule(event_handler, watch_folder, recursive=False); observer.start()

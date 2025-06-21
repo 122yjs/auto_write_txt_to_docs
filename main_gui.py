@@ -59,6 +59,14 @@ class MessengerDocsApp:
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
+        
+        # 파일 필터링 관련 변수
+        self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
+        self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
+        self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
+        
+        # 테마 관련 변수
+        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -421,6 +429,18 @@ class MessengerDocsApp:
         ctk.CTkButton(folder_frame, text="폴더 선택...", width=80, command=self.browse_folder).pack(side="left", padx=(5,0))
         ctk.CTkButton(folder_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(self.watch_folder.get())).pack(side="left", padx=(5,0))
         
+        # 파일 필터 설정
+        filter_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); filter_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(filter_frame, text="파일 필터:", width=120).pack(side="left", padx=(0,5))
+        
+        # 파일 확장자 입력
+        ext_entry = ctk.CTkEntry(filter_frame, textvariable=self.file_extensions, width=120)
+        ext_entry.pack(side="left", padx=5)
+        ctk.CTkLabel(filter_frame, text="(쉼표로 구분, 예: .txt,.log)").pack(side="left", padx=(0,5))
+        
+        # 필터 설정 버튼
+        ctk.CTkButton(filter_frame, text="고급 필터...", width=80, command=self.show_filter_settings).pack(side="right", padx=(5,0))
+        
         # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
         
         # Google Docs URL/ID 설정
@@ -674,7 +694,11 @@ class MessengerDocsApp:
         config_data = { 
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
-            "show_help_on_startup": self.show_help_on_startup.get()
+            "show_help_on_startup": self.show_help_on_startup.get(),
+            # 파일 필터링 설정 추가
+            "file_extensions": self.file_extensions.get(),
+            "use_regex_filter": self.use_regex_filter.get(),
+            "regex_pattern": self.regex_pattern.get()
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
@@ -688,6 +712,12 @@ class MessengerDocsApp:
                 self.watch_folder.set(config_data.get("watch_folder", ""))
                 self.docs_input.set(config_data.get("docs_input", ""))
                 self.show_help_on_startup.set(config_data.get("show_help_on_startup", True))
+                
+                # 파일 필터링 설정 로드
+                self.file_extensions.set(config_data.get("file_extensions", ".txt"))
+                self.use_regex_filter.set(config_data.get("use_regex_filter", False))
+                self.regex_pattern.set(config_data.get("regex_pattern", ""))
+                
                 self.log("저장된 설정 로드 완료.")
                 
                 # 설정 로드 후 상태 표시 업데이트
@@ -734,7 +764,11 @@ class MessengerDocsApp:
         
         current_config = { 
             "watch_folder": watch_folder, 
-            "docs_id": docs_id 
+            "docs_id": docs_id,
+            # 파일 필터링 설정 추가
+            "file_extensions": self.file_extensions.get(),
+            "use_regex_filter": self.use_regex_filter.get(),
+            "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else ""
         }
         
         self.monitoring_thread = threading.Thread(
@@ -1152,6 +1186,194 @@ class MessengerDocsApp:
         x = (search_window.winfo_screenwidth() // 2) - (width // 2)
         y = (search_window.winfo_screenheight() // 2) - (height // 2)
         search_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def show_filter_settings(self):
+        """고급 파일 필터 설정 대화 상자"""
+        filter_window = ctk.CTkToplevel(self.root)
+        filter_window.title("고급 파일 필터 설정")
+        filter_window.geometry("500x350")
+        filter_window.transient(self.root)  # 부모 창 위에 표시
+        filter_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(filter_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 파일 확장자 필터 섹션
+        ext_frame = ctk.CTkFrame(main_frame)
+        ext_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            ext_frame, 
+            text="파일 확장자 필터", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ctk.CTkLabel(
+            ext_frame,
+            text="감시할 파일 확장자를 쉼표로 구분하여 입력하세요.\n예: .txt,.log,.md"
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ext_entry = ctk.CTkEntry(ext_frame, textvariable=self.file_extensions)
+        ext_entry.pack(fill="x", pady=5)
+        
+        # 미리 정의된 확장자 선택 버튼들
+        preset_frame = ctk.CTkFrame(ext_frame, fg_color="transparent")
+        preset_frame.pack(fill="x", pady=5)
+        
+        def add_extension(ext):
+            current = self.file_extensions.get().strip()
+            if not current:
+                self.file_extensions.set(ext)
+            else:
+                exts = [e.strip() for e in current.split(",")]
+                if ext not in exts:
+                    exts.append(ext)
+                    self.file_extensions.set(",".join(exts))
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".txt", 
+            width=60,
+            command=lambda: add_extension(".txt")
+        ).pack(side="left", padx=(0, 5))
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".log", 
+            width=60,
+            command=lambda: add_extension(".log")
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".md", 
+            width=60,
+            command=lambda: add_extension(".md")
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".csv", 
+            width=60,
+            command=lambda: add_extension(".csv")
+        ).pack(side="left", padx=5)
+        
+        # 정규식 필터 섹션
+        regex_frame = ctk.CTkFrame(main_frame)
+        regex_frame.pack(fill="x", pady=(0, 15))
+        
+        regex_header = ctk.CTkFrame(regex_frame, fg_color="transparent")
+        regex_header.pack(fill="x")
+        
+        ctk.CTkLabel(
+            regex_header, 
+            text="정규식 필터", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(side="left", pady=(0, 5))
+        
+        regex_check = ctk.CTkCheckBox(
+            regex_header,
+            text="정규식 필터 사용",
+            variable=self.use_regex_filter,
+            onvalue=True,
+            offvalue=False
+        )
+        regex_check.pack(side="right")
+        
+        ctk.CTkLabel(
+            regex_frame,
+            text="파일 이름에 적용할 정규식 패턴을 입력하세요.\n예: ^log_\\d{8}\\.txt$ (log_날짜8자리.txt 형식 파일만 매칭)"
+        ).pack(anchor="w", pady=(0, 5))
+        
+        regex_entry = ctk.CTkEntry(regex_frame, textvariable=self.regex_pattern)
+        regex_entry.pack(fill="x", pady=5)
+        
+        # 테스트 섹션
+        test_frame = ctk.CTkFrame(main_frame)
+        test_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            test_frame, 
+            text="필터 테스트", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        test_input_frame = ctk.CTkFrame(test_frame, fg_color="transparent")
+        test_input_frame.pack(fill="x", pady=5)
+        
+        ctk.CTkLabel(test_input_frame, text="파일 이름:").pack(side="left", padx=(0, 5))
+        
+        test_filename_var = ctk.StringVar(value="example.txt")
+        test_filename_entry = ctk.CTkEntry(test_input_frame, textvariable=test_filename_var, width=200)
+        test_filename_entry.pack(side="left", fill="x", expand=True)
+        
+        test_result_var = ctk.StringVar(value="")
+        
+        def test_filter():
+            filename = test_filename_var.get().strip()
+            if not filename:
+                test_result_var.set("파일 이름을 입력하세요")
+                return
+                
+            # 확장자 필터 테스트
+            extensions = [ext.strip() for ext in self.file_extensions.get().split(",") if ext.strip()]
+            ext_match = any(filename.lower().endswith(ext.lower()) for ext in extensions) if extensions else True
+            
+            # 정규식 필터 테스트
+            regex_match = True
+            if self.use_regex_filter.get() and self.regex_pattern.get().strip():
+                try:
+                    import re
+                    pattern = re.compile(self.regex_pattern.get())
+                    regex_match = bool(pattern.search(filename))
+                except re.error:
+                    test_result_var.set("정규식 패턴 오류!")
+                    return
+            
+            # 최종 결과
+            if ext_match and regex_match:
+                test_result_var.set("✅ 매칭됨: 이 파일은 감시 대상입니다")
+            else:
+                test_result_var.set("❌ 매칭 안됨: 이 파일은 무시됩니다")
+        
+        ctk.CTkButton(
+            test_input_frame,
+            text="테스트",
+            width=80,
+            command=test_filter
+        ).pack(side="right", padx=(5, 0))
+        
+        test_result_label = ctk.CTkLabel(
+            test_frame,
+            textvariable=test_result_var,
+            font=ctk.CTkFont(weight="bold")
+        )
+        test_result_label.pack(fill="x", pady=5)
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 확인 버튼
+        ok_button = ctk.CTkButton(
+            button_frame,
+            text="확인",
+            command=filter_window.destroy,
+            width=100
+        )
+        ok_button.pack(side="right")
+        
+        # 창 중앙 배치
+        filter_window.update_idletasks()
+        width = filter_window.winfo_width()
+        height = filter_window.winfo_height()
+        x = (filter_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (filter_window.winfo_screenheight() // 2) - (height // 2)
+        filter_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # 초기 테스트 실행
+        filter_window.after(500, test_filter)
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
