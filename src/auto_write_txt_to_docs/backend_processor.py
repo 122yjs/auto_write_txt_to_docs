@@ -129,7 +129,7 @@ def read_file_with_multiple_encodings(filepath, start_offset, log_func):
             backend_logger.debug(f"파일 읽기 성공 ({enc}): {os.path.basename(filepath)}")
             successful_encoding = enc
             break # 읽기 성공 시 종료
-        except (UnicodeDecodeError, FileNotFoundError, OSError, Exception) as e:
+        except (UnicodeDecodeError, FileNotFoundError, OSError) as e:
             backend_logger.debug(f"인코딩 {enc} 실패: {e}")
             continue # 실패 시 다음 인코딩 시도
     
