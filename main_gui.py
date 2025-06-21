@@ -13,6 +13,7 @@ import platform
 import logging
 import webbrowser
 from datetime import datetime
+import psutil  # 메모리 사용량 모니터링용
 
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
@@ -56,6 +57,10 @@ class MessengerDocsApp:
         self.appearance_mode = ctk.StringVar(value="System")
         ctk.set_appearance_mode(self.appearance_mode.get())
         ctk.set_default_color_theme("blue")
+        
+        # 메모리 모니터링 관련 변수
+        self.memory_usage = ctk.StringVar(value="메모리: 확인 중...")
+        self.memory_check_interval = 10000  # 10초마다 메모리 사용량 확인
 
         # --- 변수 선언 ---
         self.watch_folder = ctk.StringVar()
@@ -103,6 +108,9 @@ class MessengerDocsApp:
 
         # --- 로그 큐 처리 ---
         self.root.after(100, self.process_log_queue)
+        
+        # --- 메모리 사용량 모니터링 시작 ---
+        self.root.after(1000, self.check_memory_usage)
 
         # --- 창 닫기(X) 버튼 누르면 숨기도록 설정 ---
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window) # 변경 없음
@@ -394,6 +402,23 @@ class MessengerDocsApp:
         self.status_label = ctk.CTkLabel(status_left_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
         self.status_label.pack(side="left", padx=5)
         
+        # 메모리 사용량 표시 (중앙)
+        memory_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        memory_frame.pack(side="left", fill="y", padx=10, pady=5)
+        self.memory_label = ctk.CTkLabel(memory_frame, textvariable=self.memory_usage, font=ctk.CTkFont(size=12))
+        self.memory_label.pack(side="left", padx=5)
+        
+        # 메모리 최적화 버튼
+        self.memory_optimize_button = ctk.CTkButton(
+            memory_frame,
+            text="최적화",
+            width=60,
+            height=20,
+            command=self.optimize_memory,
+            font=ctk.CTkFont(size=11)
+        )
+        self.memory_optimize_button.pack(side="left", padx=(5,0))
+        
         # 현재 감시 정보 표시 (오른쪽)
         status_right_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
         status_right_frame.pack(side="right", fill="y", padx=10, pady=5)
@@ -487,6 +512,15 @@ class MessengerDocsApp:
             width=100
         )
         theme_button.pack(side="right", padx=10)
+        
+        # 백업/복원 버튼
+        backup_button = ctk.CTkButton(
+            control_frame,
+            text="백업/복원",
+            command=self.show_backup_restore_dialog,
+            width=100
+        )
+        backup_button.pack(side="right", padx=10)
         
         # 설정 저장 버튼
         ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
@@ -630,12 +664,43 @@ class MessengerDocsApp:
         try:
             # GUI 로그 출력
             if self.root.winfo_exists():
-                self.log_text.configure(state='normal'); self.log_text.insert(ctk.END, message + '\n'); self.log_text.configure(state='disabled'); self.log_text.see(ctk.END)
+                self.log_text.configure(state='normal')
+                
+                # 로그 텍스트 크기 제한 (메모리 최적화)
+                self.optimize_log_memory()
+                
+                # 새 로그 추가
+                self.log_text.insert(ctk.END, message + '\n')
+                self.log_text.configure(state='disabled')
+                self.log_text.see(ctk.END)
             
             # 파일 로그 출력
             if hasattr(self, 'logger'):
                 self.logger.info(message)
         except Exception: pass
+        
+    def optimize_log_memory(self):
+        """로그 텍스트 크기가 너무 커지면 오래된 로그 삭제 (메모리 최적화)"""
+        try:
+            # 현재 로그 텍스트 내용 가져오기
+            log_content = self.log_text.get("1.0", ctk.END)
+            lines = log_content.split('\n')
+            
+            # 로그 라인이 1000줄 이상이면 오래된 로그 삭제
+            max_lines = 1000
+            if len(lines) > max_lines:
+                # 오래된 로그 삭제 (절반 정도 삭제)
+                lines_to_keep = lines[len(lines) - max_lines // 2:]
+                
+                # 로그 텍스트 지우고 유지할 라인만 다시 삽입
+                self.log_text.delete("1.0", ctk.END)
+                self.log_text.insert("1.0", "\n".join(lines_to_keep) + "\n")
+                
+                # 메모리 최적화 메시지 추가
+                self.log_text.insert("1.0", "--- 오래된 로그 항목이 메모리에서 정리되었습니다 ---\n\n")
+        except Exception as e:
+            # 오류 발생 시 조용히 무시 (로깅 시스템 자체에서 오류가 발생하므로 로그 출력 안 함)
+            print(f"로그 메모리 최적화 오류: {e}")
     def log_threadsafe(self, message): self.log_queue.put(message)
     def process_log_queue(self):
         try:
@@ -1515,6 +1580,263 @@ class MessengerDocsApp:
         x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
         y = (theme_window.winfo_screenheight() // 2) - (height // 2)
         theme_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def backup_settings(self):
+        """현재 설정을 백업 파일로 저장"""
+        # 백업 파일 저장 대화 상자
+        backup_path = filedialog.asksaveasfilename(
+            title="설정 백업 저장",
+            defaultextension=".json",
+            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")],
+            initialfile=f"messenger_docs_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        
+        if not backup_path:
+            return  # 사용자가 취소함
+        
+        try:
+            # 현재 설정 데이터 수집
+            config_data = {
+                "watch_folder": self.watch_folder.get(),
+                "docs_input": self.docs_input.get(),
+                "show_help_on_startup": self.show_help_on_startup.get(),
+                "file_extensions": self.file_extensions.get(),
+                "use_regex_filter": self.use_regex_filter.get(),
+                "regex_pattern": self.regex_pattern.get(),
+                "appearance_mode": self.appearance_mode.get(),
+                # 백업 메타데이터
+                "backup_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "backup_version": "1.0"
+            }
+            
+            # 백업 파일 저장
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            
+            self.log(f"설정 백업 완료: {backup_path}")
+            messagebox.showinfo("백업 완료", f"설정이 성공적으로 백업되었습니다.\n{backup_path}", parent=self.root)
+        except Exception as e:
+            self.log(f"설정 백업 실패: {e}")
+            messagebox.showerror("백업 실패", f"설정 백업 중 오류가 발생했습니다.\n{e}", parent=self.root)
+    
+    def restore_settings(self):
+        """백업 파일에서 설정 복원"""
+        # 백업 파일 선택 대화 상자
+        backup_path = filedialog.askopenfilename(
+            title="설정 백업 파일 선택",
+            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")]
+        )
+        
+        if not backup_path:
+            return  # 사용자가 취소함
+        
+        try:
+            # 백업 파일 로드
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
+            
+            # 백업 버전 확인
+            if "backup_version" not in backup_data:
+                self.log("경고: 백업 파일에 버전 정보가 없습니다.")
+            
+            # 설정 복원 전 확인
+            confirm = messagebox.askyesno(
+                "설정 복원 확인",
+                f"백업 파일({os.path.basename(backup_path)})에서 설정을 복원하시겠습니까?\n\n"
+                f"백업 날짜: {backup_data.get('backup_date', '정보 없음')}\n\n"
+                "현재 설정이 모두 덮어쓰기됩니다.",
+                parent=self.root
+            )
+            
+            if not confirm:
+                return
+            
+            # 설정 복원
+            if "watch_folder" in backup_data:
+                self.watch_folder.set(backup_data["watch_folder"])
+            
+            if "docs_input" in backup_data:
+                self.docs_input.set(backup_data["docs_input"])
+            
+            if "show_help_on_startup" in backup_data:
+                self.show_help_on_startup.set(backup_data["show_help_on_startup"])
+            
+            if "file_extensions" in backup_data:
+                self.file_extensions.set(backup_data["file_extensions"])
+            
+            if "use_regex_filter" in backup_data:
+                self.use_regex_filter.set(backup_data["use_regex_filter"])
+            
+            if "regex_pattern" in backup_data:
+                self.regex_pattern.set(backup_data["regex_pattern"])
+            
+            if "appearance_mode" in backup_data:
+                appearance_mode = backup_data["appearance_mode"]
+                self.appearance_mode.set(appearance_mode)
+                ctk.set_appearance_mode(appearance_mode)
+            
+            # 설정 변경 플래그 설정 및 상태 업데이트
+            self.settings_changed = True
+            self.on_setting_changed()
+            
+            self.log(f"설정 복원 완료: {backup_path}")
+            messagebox.showinfo("복원 완료", "설정이 성공적으로 복원되었습니다.", parent=self.root)
+        except json.JSONDecodeError:
+            self.log(f"설정 복원 실패: 잘못된 JSON 형식 - {backup_path}")
+            messagebox.showerror("복원 실패", "유효하지 않은 백업 파일입니다. JSON 형식이 올바르지 않습니다.", parent=self.root)
+        except Exception as e:
+            self.log(f"설정 복원 실패: {e}")
+            messagebox.showerror("복원 실패", f"설정 복원 중 오류가 발생했습니다.\n{e}", parent=self.root)
+    
+    def show_backup_restore_dialog(self):
+        """백업 및 복원 대화 상자"""
+        backup_window = ctk.CTkToplevel(self.root)
+        backup_window.title("설정 백업 및 복원")
+        backup_window.geometry("400x300")
+        backup_window.transient(self.root)  # 부모 창 위에 표시
+        backup_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(backup_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="설정 백업 및 복원", 
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 설명
+        description = ctk.CTkLabel(
+            main_frame,
+            text="현재 설정을 백업하거나 이전에 백업한 설정을 복원할 수 있습니다.",
+            wraplength=350
+        )
+        description.pack(pady=(0, 20))
+        
+        # 백업 섹션
+        backup_frame = ctk.CTkFrame(main_frame)
+        backup_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            backup_frame,
+            text="설정 백업",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(5, 10), padx=10)
+        
+        ctk.CTkLabel(
+            backup_frame,
+            text="현재 설정을 파일로 저장합니다.",
+            wraplength=350
+        ).pack(anchor="w", padx=10)
+        
+        ctk.CTkButton(
+            backup_frame,
+            text="설정 백업",
+            command=lambda: [backup_window.destroy(), self.backup_settings()],
+            width=120
+        ).pack(anchor="w", pady=10, padx=10)
+        
+        # 복원 섹션
+        restore_frame = ctk.CTkFrame(main_frame)
+        restore_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            restore_frame,
+            text="설정 복원",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(5, 10), padx=10)
+        
+        ctk.CTkLabel(
+            restore_frame,
+            text="백업 파일에서 설정을 불러옵니다.",
+            wraplength=350
+        ).pack(anchor="w", padx=10)
+        
+        ctk.CTkButton(
+            restore_frame,
+            text="설정 복원",
+            command=lambda: [backup_window.destroy(), self.restore_settings()],
+            width=120
+        ).pack(anchor="w", pady=10, padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            main_frame,
+            text="닫기",
+            command=backup_window.destroy,
+            width=100
+        )
+        close_button.pack(side="right", pady=(10, 0))
+        
+        # 창 중앙 배치
+        backup_window.update_idletasks()
+        width = backup_window.winfo_width()
+        height = backup_window.winfo_height()
+        x = (backup_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (backup_window.winfo_screenheight() // 2) - (height // 2)
+        backup_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def check_memory_usage(self):
+        """현재 프로세스의 메모리 사용량을 확인하고 표시"""
+        try:
+            # 현재 프로세스의 메모리 사용량 확인
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            
+            # MB 단위로 변환
+            memory_usage_mb = memory_info.rss / 1024 / 1024
+            
+            # 메모리 사용량 표시 업데이트
+            self.memory_usage.set(f"메모리: {memory_usage_mb:.1f} MB")
+            
+            # 메모리 사용량이 너무 높으면 경고
+            if memory_usage_mb > 200:  # 200MB 이상이면 경고
+                self.log(f"경고: 메모리 사용량이 높습니다 ({memory_usage_mb:.1f} MB). 프로그램을 재시작하는 것이 좋습니다.")
+                
+                # 메모리 사용량이 매우 높으면 자동 최적화 시도
+                if memory_usage_mb > 300:  # 300MB 이상이면 강제 최적화
+                    self.log("메모리 사용량이 매우 높습니다. 자동 최적화를 시도합니다.")
+                    self.optimize_memory()
+        except Exception as e:
+            print(f"메모리 사용량 확인 중 오류: {e}")
+        finally:
+            # 주기적으로 메모리 사용량 확인
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                self.root.after(self.memory_check_interval, self.check_memory_usage)
+    
+    def optimize_memory(self):
+        """메모리 사용량 최적화 시도"""
+        try:
+            # 1. 로그 텍스트 최적화
+            if hasattr(self, 'log_text') and self.root.winfo_exists():
+                self.log_text.configure(state='normal')
+                # 로그 텍스트를 더 적극적으로 정리 (최근 200줄만 유지)
+                log_content = self.log_text.get("1.0", ctk.END)
+                lines = log_content.split('\n')
+                if len(lines) > 200:
+                    lines_to_keep = lines[-200:]
+                    self.log_text.delete("1.0", ctk.END)
+                    self.log_text.insert("1.0", "\n".join(lines_to_keep) + "\n")
+                    self.log_text.insert("1.0", "--- 메모리 최적화: 로그가 정리되었습니다 ---\n\n")
+                self.log_text.configure(state='disabled')
+            
+            # 2. 가비지 컬렉션 강제 실행
+            import gc
+            gc.collect()
+            
+            # 3. 최적화 후 메모리 사용량 다시 확인
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_usage_mb = memory_info.rss / 1024 / 1024
+            self.log(f"메모리 최적화 완료. 현재 메모리 사용량: {memory_usage_mb:.1f} MB")
+            
+            # 메모리 사용량 표시 업데이트
+            self.memory_usage.set(f"메모리: {memory_usage_mb:.1f} MB")
+        except Exception as e:
+            print(f"메모리 최적화 중 오류: {e}")
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """

@@ -74,6 +74,9 @@ def load_line_cache(log_func):
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 added_lines_cache = set(json.load(f))
             log_func(f"백엔드: 라인 캐시({CACHE_FILE}) 로드됨 ({len(added_lines_cache)}개).")
+            
+            # 캐시 크기 제한 (메모리 최적화)
+            optimize_cache_size(log_func)
         except json.JSONDecodeError:
             log_func(f"경고: 라인 캐시 파일({CACHE_FILE}) 형식이 잘못됨. 빈 캐시로 시작.")
             added_lines_cache = set()
@@ -83,6 +86,32 @@ def load_line_cache(log_func):
     else:
         log_func(f"백엔드: 라인 캐시 파일({CACHE_FILE}) 없음. 새로 시작합니다.")
         added_lines_cache = set()
+
+def optimize_cache_size(log_func):
+    """ 라인 캐시 크기가 너무 크면 일부 항목을 제거합니다. (메모리 최적화) """
+    global added_lines_cache
+    
+    # 최대 캐시 크기 설정 (라인 수)
+    MAX_CACHE_SIZE = 10000
+    
+    if len(added_lines_cache) > MAX_CACHE_SIZE:
+        # 캐시가 너무 크면 일부 항목 제거 (최대 크기의 70%만 유지)
+        target_size = int(MAX_CACHE_SIZE * 0.7)
+        items_to_remove = len(added_lines_cache) - target_size
+        
+        # 캐시는 set이므로 순서가 없음. 임의의 항목을 제거
+        items_to_keep = list(added_lines_cache)[-target_size:]
+        added_lines_cache = set(items_to_keep)
+        
+        log_func(f"백엔드: 라인 캐시 크기 최적화 - {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
+        
+        # 최적화된 캐시 즉시 저장
+        try:
+            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(list(added_lines_cache), f, ensure_ascii=False)
+            log_func("백엔드: 최적화된 라인 캐시 저장 완료")
+        except Exception as e:
+            log_func(f"경고: 최적화된 라인 캐시 저장 실패 - {e}")
 
 def save_line_cache(log_func):
     """ 프로그램 종료 시 라인 캐시 데이터를 파일에 저장합니다. """
