@@ -478,6 +478,17 @@ class MessengerDocsApp:
         self.open_docs_button.pack(side="left", padx=10)
         
         ctk.CTkFrame(control_frame, fg_color="transparent").pack(side="left", fill="x", expand=True)
+        
+        # 테마 버튼
+        theme_button = ctk.CTkButton(
+            control_frame,
+            text="테마 설정",
+            command=self.show_theme_settings,
+            width=100
+        )
+        theme_button.pack(side="right", padx=10)
+        
+        # 설정 저장 버튼
         ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
         
         # 로그 프레임
@@ -700,7 +711,9 @@ class MessengerDocsApp:
             # 파일 필터링 설정 추가
             "file_extensions": self.file_extensions.get(),
             "use_regex_filter": self.use_regex_filter.get(),
-            "regex_pattern": self.regex_pattern.get()
+            "regex_pattern": self.regex_pattern.get(),
+            # 테마 설정 추가
+            "appearance_mode": self.appearance_mode.get()
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
@@ -719,6 +732,12 @@ class MessengerDocsApp:
                 self.file_extensions.set(config_data.get("file_extensions", ".txt"))
                 self.use_regex_filter.set(config_data.get("use_regex_filter", False))
                 self.regex_pattern.set(config_data.get("regex_pattern", ""))
+                
+                # 테마 설정 로드 및 적용
+                appearance_mode = config_data.get("appearance_mode", "System")
+                self.appearance_mode.set(appearance_mode)
+                ctk.set_appearance_mode(appearance_mode)
+                self.log(f"테마 설정 로드: {appearance_mode} 모드")
                 
                 self.log("저장된 설정 로드 완료.")
                 
@@ -1376,6 +1395,126 @@ class MessengerDocsApp:
         
         # 초기 테스트 실행
         filter_window.after(500, test_filter)
+
+    def toggle_theme(self):
+        """테마 모드 전환 (라이트/다크)"""
+        current_mode = ctk.get_appearance_mode()
+        new_mode = "Dark" if current_mode == "Light" else "Light"
+        ctk.set_appearance_mode(new_mode)
+        self.appearance_mode.set(new_mode)
+        self.log(f"테마 변경: {new_mode} 모드")
+        self.settings_changed = True
+    
+    def show_theme_settings(self):
+        """테마 설정 대화 상자"""
+        theme_window = ctk.CTkToplevel(self.root)
+        theme_window.title("테마 설정")
+        theme_window.geometry("400x250")
+        theme_window.transient(self.root)  # 부모 창 위에 표시
+        theme_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(theme_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="테마 설정", 
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 테마 모드 선택 프레임
+        mode_frame = ctk.CTkFrame(main_frame)
+        mode_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            mode_frame, 
+            text="테마 모드:", 
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # 라디오 버튼 변수
+        mode_var = ctk.StringVar(value=self.appearance_mode.get())
+        
+        # 라디오 버튼 생성
+        modes = [("시스템 설정 따름", "System"), ("라이트 모드", "Light"), ("다크 모드", "Dark")]
+        
+        for text, value in modes:
+            radio = ctk.CTkRadioButton(
+                mode_frame,
+                text=text,
+                value=value,
+                variable=mode_var
+            )
+            radio.pack(anchor="w", pady=5, padx=10)
+        
+        # 미리보기 프레임
+        preview_frame = ctk.CTkFrame(main_frame)
+        preview_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            preview_frame,
+            text="미리보기:",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # 미리보기 요소들
+        preview_elements = ctk.CTkFrame(preview_frame)
+        preview_elements.pack(fill="x", pady=5, padx=10)
+        
+        ctk.CTkButton(
+            preview_elements,
+            text="버튼",
+            width=80
+        ).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkEntry(
+            preview_elements,
+            width=120,
+            placeholder_text="입력 필드"
+        ).pack(side="left")
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 적용 버튼
+        def apply_theme():
+            new_mode = mode_var.get()
+            if new_mode != self.appearance_mode.get():
+                self.appearance_mode.set(new_mode)
+                ctk.set_appearance_mode(new_mode)
+                self.log(f"테마 변경: {new_mode} 모드")
+                self.settings_changed = True
+            theme_window.destroy()
+        
+        apply_button = ctk.CTkButton(
+            button_frame,
+            text="적용",
+            command=apply_theme,
+            width=100
+        )
+        apply_button.pack(side="right", padx=(5, 0))
+        
+        # 취소 버튼
+        cancel_button = ctk.CTkButton(
+            button_frame,
+            text="취소",
+            command=theme_window.destroy,
+            width=100,
+            fg_color="gray"
+        )
+        cancel_button.pack(side="right", padx=5)
+        
+        # 창 중앙 배치
+        theme_window.update_idletasks()
+        width = theme_window.winfo_width()
+        height = theme_window.winfo_height()
+        x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (theme_window.winfo_screenheight() // 2) - (height // 2)
+        theme_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
