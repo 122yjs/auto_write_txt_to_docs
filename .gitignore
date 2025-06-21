@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 venv/
 ENV/
+.rovodev/
+.agent.md
 
 # Distribution / packaging
 .Python
@@ -28,6 +30,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.exe
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -56,9 +59,8 @@ coverage.xml
 token.json
 credentials.json 
 developer_credentials.json
-config.json # 개인 설정이 포함될 수 있으므로 추가하는 것을 고려해보세요.
-added_lines_cache.json # 이 파일도 사용자별 데이터일 수 있습니다.
-
+config.json 
+added_lines_cache.json 
 # Log files
 *.log
 hwp_mcp_stdio_server.log

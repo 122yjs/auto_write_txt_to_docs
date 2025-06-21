@@ -1,7 +1,7 @@
 # main_gui.py (아이콘 생성 + Docs 기록 + 트레이 기능 버전)
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, scrolledtext
 import os
 import json
 import threading
@@ -11,7 +11,9 @@ import time
 import subprocess
 import platform
 import logging
+import webbrowser
 from datetime import datetime
+import psutil  # 메모리 사용량 모니터링용
 
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
@@ -51,12 +53,27 @@ class MessengerDocsApp:
         self.root.title("메신저 Docs 자동 기록 (트레이)")
         self.root.geometry("700x500")
 
-        ctk.set_appearance_mode("System")
+        # 테마 설정
+        self.appearance_mode = ctk.StringVar(value="System")
+        ctk.set_appearance_mode(self.appearance_mode.get())
         ctk.set_default_color_theme("blue")
+        
+        # 메모리 모니터링 관련 변수
+        self.memory_usage = ctk.StringVar(value="메모리: 확인 중...")
+        self.memory_check_interval = 10000  # 10초마다 메모리 사용량 확인
 
         # --- 변수 선언 ---
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
+        self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
+        
+        # 파일 필터링 관련 변수
+        self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
+        self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
+        self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
+        
+        # 테마 관련 변수
+        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -76,6 +93,7 @@ class MessengerDocsApp:
         # 설정 변수 변경 감지를 위한 추적
         self.watch_folder.trace('w', self.on_setting_changed)
         self.docs_input.trace('w', self.on_setting_changed)
+        self.show_help_on_startup.trace('w', self.on_setting_changed)
         self.settings_changed = False
 
         # --- 아이콘 이미지 생성 또는 로드 ---
@@ -90,6 +108,9 @@ class MessengerDocsApp:
 
         # --- 로그 큐 처리 ---
         self.root.after(100, self.process_log_queue)
+        
+        # --- 메모리 사용량 모니터링 시작 ---
+        self.root.after(1000, self.check_memory_usage)
 
         # --- 창 닫기(X) 버튼 누르면 숨기도록 설정 ---
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window) # 변경 없음
@@ -107,6 +128,10 @@ class MessengerDocsApp:
 
         # --- 인증 파일 확인 ---
         self.check_credentials_file()
+        
+        # --- 도움말 표시 (설정에 따라) ---
+        if self.show_help_on_startup.get():
+            self.root.after(800, self.show_help_dialog)  # 0.8초 후 도움말 표시
 
 
     def check_credentials_file(self):
@@ -243,8 +268,29 @@ class MessengerDocsApp:
             traceback.print_exc()
     
     def on_setting_changed(self, *args):
-        """설정 변경 감지"""
+        """설정 변경 감지 및 상태 표시 업데이트"""
         self.settings_changed = True
+        
+        # 감시 폴더 정보 업데이트
+        folder_path = self.watch_folder.get().strip()
+        if folder_path:
+            folder_name = os.path.basename(folder_path) or folder_path
+            self.folder_info_var.set(f"폴더: {folder_name}")
+        else:
+            self.folder_info_var.set("폴더: 설정되지 않음")
+            
+        # Docs 문서 정보 업데이트
+        docs_input = self.docs_input.get().strip()
+        if docs_input:
+            # URL에서 ID 추출
+            docs_id = extract_google_id_from_url(docs_input)
+            if len(docs_id) > 12:  # ID가 너무 길면 줄임
+                docs_id_display = docs_id[:10] + "..."
+            else:
+                docs_id_display = docs_id
+            self.docs_info_var.set(f"문서: {docs_id_display}")
+        else:
+            self.docs_info_var.set("문서: 설정되지 않음")
     
     def validate_inputs(self):
         """입력값 유효성 검사"""
@@ -305,6 +351,34 @@ class MessengerDocsApp:
         except Exception as e:
             self.log(f"오류: 폴더 열기 실패 - {e}")
             messagebox.showerror("오류", f"폴더 열기 실패:\n{e}", parent=self.root)
+            
+    def open_docs_in_browser(self):
+        """Google Docs 문서를 웹브라우저에서 열기"""
+        docs_input_val = self.docs_input.get().strip()
+        
+        if not docs_input_val:
+            self.log("경고: Google Docs URL/ID가 설정되지 않았습니다.")
+            messagebox.showwarning("경고", "Google Docs URL 또는 ID를 먼저 입력해주세요.", parent=self.root)
+            return
+            
+        # URL인지 ID인지 확인
+        docs_id = extract_google_id_from_url(docs_input_val)
+        
+        if not docs_id:
+            self.log("경고: 유효한 Google Docs URL/ID가 아닙니다.")
+            messagebox.showwarning("경고", "유효한 Google Docs URL 또는 ID를 입력해주세요.", parent=self.root)
+            return
+            
+        # Google Docs URL 형식으로 변환
+        docs_url = f"https://docs.google.com/document/d/{docs_id}/edit"
+        
+        try:
+            # 웹브라우저 열기
+            webbrowser.open(docs_url)
+            self.log(f"Google Docs 문서 열기 성공: {docs_url}")
+        except Exception as e:
+            self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
+            messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
     
     def update_status(self, status_text, detail_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
@@ -320,9 +394,46 @@ class MessengerDocsApp:
         
         # 상태 표시 프레임
         status_frame = ctk.CTkFrame(main_frame); status_frame.pack(pady=(0,10), padx=10, fill="x")
-        ctk.CTkLabel(status_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(10,5), pady=5)
-        self.status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
-        self.status_label.pack(side="left", padx=5, pady=5)
+        
+        # 상태 표시 (왼쪽)
+        status_left_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        status_left_frame.pack(side="left", fill="y", padx=10, pady=5)
+        ctk.CTkLabel(status_left_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0,5))
+        self.status_label = ctk.CTkLabel(status_left_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
+        self.status_label.pack(side="left", padx=5)
+        
+        # 메모리 사용량 표시 (중앙)
+        memory_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        memory_frame.pack(side="left", fill="y", padx=10, pady=5)
+        self.memory_label = ctk.CTkLabel(memory_frame, textvariable=self.memory_usage, font=ctk.CTkFont(size=12))
+        self.memory_label.pack(side="left", padx=5)
+        
+        # 메모리 최적화 버튼
+        self.memory_optimize_button = ctk.CTkButton(
+            memory_frame,
+            text="최적화",
+            width=60,
+            height=20,
+            command=self.optimize_memory,
+            font=ctk.CTkFont(size=11)
+        )
+        self.memory_optimize_button.pack(side="left", padx=(5,0))
+        
+        # 현재 감시 정보 표시 (오른쪽)
+        status_right_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        status_right_frame.pack(side="right", fill="y", padx=10, pady=5)
+        
+        # 감시 폴더 표시
+        self.folder_info_var = ctk.StringVar(value="폴더: 설정되지 않음")
+        self.folder_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.folder_info_var, 
+                                             font=ctk.CTkFont(size=12))
+        self.folder_info_label.pack(side="top", anchor="e")
+        
+        # Docs 문서 표시
+        self.docs_info_var = ctk.StringVar(value="문서: 설정되지 않음")
+        self.docs_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.docs_info_var, 
+                                           font=ctk.CTkFont(size=12))
+        self.docs_info_label.pack(side="top", anchor="e")
         
         settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
         ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
@@ -345,6 +456,18 @@ class MessengerDocsApp:
         ctk.CTkButton(folder_frame, text="폴더 선택...", width=80, command=self.browse_folder).pack(side="left", padx=(5,0))
         ctk.CTkButton(folder_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(self.watch_folder.get())).pack(side="left", padx=(5,0))
         
+        # 파일 필터 설정
+        filter_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); filter_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(filter_frame, text="파일 필터:", width=120).pack(side="left", padx=(0,5))
+        
+        # 파일 확장자 입력
+        ext_entry = ctk.CTkEntry(filter_frame, textvariable=self.file_extensions, width=120)
+        ext_entry.pack(side="left", padx=5)
+        ctk.CTkLabel(filter_frame, text="(쉼표로 구분, 예: .txt,.log)").pack(side="left", padx=(0,5))
+        
+        # 필터 설정 버튼
+        ctk.CTkButton(filter_frame, text="고급 필터...", width=80, command=self.show_filter_settings).pack(side="right", padx=(5,0))
+        
         # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
         
         # Google Docs URL/ID 설정
@@ -352,11 +475,54 @@ class MessengerDocsApp:
         ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
         ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
         
+        # 웹에서 열기 버튼 (아이콘 추가 및 스타일 개선)
+        docs_button = ctk.CTkButton(
+            docs_frame, 
+            text="문서 열기", 
+            width=80, 
+            command=self.open_docs_in_browser,
+            fg_color="#4285F4",  # Google 파란색
+            hover_color="#3367D6"  # 어두운 파란색
+        )
+        docs_button.pack(side="left", padx=(5,0))
+        
         # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
         self.start_button = ctk.CTkButton(control_frame, text="감시 시작", command=self.start_monitoring, width=120); self.start_button.pack(side="left", padx=10)
         self.stop_button = ctk.CTkButton(control_frame, text="감시 중지", command=self.stop_monitoring, width=120, state="disabled"); self.stop_button.pack(side="left", padx=10)
+        
+        # 웹에서 열기 버튼 (제어 프레임에도 추가)
+        self.open_docs_button = ctk.CTkButton(
+            control_frame, 
+            text="Docs 웹에서 열기", 
+            command=self.open_docs_in_browser, 
+            width=120,
+            fg_color="#4285F4",  # Google 파란색
+            hover_color="#3367D6"  # 어두운 파란색
+        )
+        self.open_docs_button.pack(side="left", padx=10)
+        
         ctk.CTkFrame(control_frame, fg_color="transparent").pack(side="left", fill="x", expand=True)
+        
+        # 테마 버튼
+        theme_button = ctk.CTkButton(
+            control_frame,
+            text="테마 설정",
+            command=self.show_theme_settings,
+            width=100
+        )
+        theme_button.pack(side="right", padx=10)
+        
+        # 백업/복원 버튼
+        backup_button = ctk.CTkButton(
+            control_frame,
+            text="백업/복원",
+            command=self.show_backup_restore_dialog,
+            width=100
+        )
+        backup_button.pack(side="right", padx=10)
+        
+        # 설정 저장 버튼
         ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
         
         # 로그 프레임
@@ -373,7 +539,25 @@ class MessengerDocsApp:
             width=100,
             command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs"))
         )
-        self.log_folder_button.pack(side="right", padx=(0,0)) # 오른쪽 정렬
+        self.log_folder_button.pack(side="right", padx=(5,0)) # 오른쪽 정렬
+        
+        # 로그 검색 버튼 추가
+        self.log_search_button = ctk.CTkButton(
+            log_header_frame,
+            text="로그 검색",
+            width=80,
+            command=self.show_log_search_dialog
+        )
+        self.log_search_button.pack(side="right", padx=5) # 오른쪽 정렬
+        
+        # 로그 지우기 버튼 추가
+        self.log_clear_button = ctk.CTkButton(
+            log_header_frame,
+            text="로그 지우기",
+            width=80,
+            command=self.clear_log
+        )
+        self.log_clear_button.pack(side="right", padx=5) # 오른쪽 정렬
 
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
@@ -390,6 +574,18 @@ class MessengerDocsApp:
             self.tray_thread = threading.Thread(target=self.run_tray_icon, daemon=True)
             self.tray_thread.start()
             self.log("트레이 아이콘 스레드 시작됨.")
+            
+    def show_tray_notification(self, title, message):
+        """트레이 아이콘에 알림 표시"""
+        if self.tray_icon and hasattr(self.tray_icon, 'notify'):
+            try:
+                # 트레이 아이콘이 실행 중이고 notify 메서드가 있는 경우
+                self.tray_icon.notify(title, message)
+                self.log(f"트레이 알림 표시: {title}")
+            except Exception as e:
+                self.log(f"트레이 알림 표시 실패: {e}")
+        else:
+            self.log("트레이 아이콘이 초기화되지 않아 알림을 표시할 수 없습니다.")
 
     def hide_window(self): # X 버튼 클릭 시 호출됨
         """ 메인 창 숨기기 """
@@ -468,12 +664,43 @@ class MessengerDocsApp:
         try:
             # GUI 로그 출력
             if self.root.winfo_exists():
-                self.log_text.configure(state='normal'); self.log_text.insert(ctk.END, message + '\n'); self.log_text.configure(state='disabled'); self.log_text.see(ctk.END)
+                self.log_text.configure(state='normal')
+                
+                # 로그 텍스트 크기 제한 (메모리 최적화)
+                self.optimize_log_memory()
+                
+                # 새 로그 추가
+                self.log_text.insert(ctk.END, message + '\n')
+                self.log_text.configure(state='disabled')
+                self.log_text.see(ctk.END)
             
             # 파일 로그 출력
             if hasattr(self, 'logger'):
                 self.logger.info(message)
         except Exception: pass
+        
+    def optimize_log_memory(self):
+        """로그 텍스트 크기가 너무 커지면 오래된 로그 삭제 (메모리 최적화)"""
+        try:
+            # 현재 로그 텍스트 내용 가져오기
+            log_content = self.log_text.get("1.0", ctk.END)
+            lines = log_content.split('\n')
+            
+            # 로그 라인이 1000줄 이상이면 오래된 로그 삭제
+            max_lines = 1000
+            if len(lines) > max_lines:
+                # 오래된 로그 삭제 (절반 정도 삭제)
+                lines_to_keep = lines[len(lines) - max_lines // 2:]
+                
+                # 로그 텍스트 지우고 유지할 라인만 다시 삽입
+                self.log_text.delete("1.0", ctk.END)
+                self.log_text.insert("1.0", "\n".join(lines_to_keep) + "\n")
+                
+                # 메모리 최적화 메시지 추가
+                self.log_text.insert("1.0", "--- 오래된 로그 항목이 메모리에서 정리되었습니다 ---\n\n")
+        except Exception as e:
+            # 오류 발생 시 조용히 무시 (로깅 시스템 자체에서 오류가 발생하므로 로그 출력 안 함)
+            print(f"로그 메모리 최적화 오류: {e}")
     def log_threadsafe(self, message): self.log_queue.put(message)
     def process_log_queue(self):
         try:
@@ -497,6 +724,21 @@ class MessengerDocsApp:
                     # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
                     if self.is_monitoring:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
+                    
+                    # 트레이 알림 표시
+                    if "줄 추가" in msg:
+                        try:
+                            # 추가된 줄 수 추출
+                            import re
+                            match = re.search(r'(\d+)줄 추가', msg)
+                            lines_count = match.group(1) if match else "새로운"
+                            
+                            # 알림 표시
+                            notification_title = "메신저 Docs 자동 기록"
+                            notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
+                            self.show_tray_notification(notification_title, notification_message)
+                        except Exception as e:
+                            self.log(f"알림 처리 중 오류: {e}")
                 
                 # 오류 메시지 처리 강화
                 error_detail = None
@@ -514,11 +756,9 @@ class MessengerDocsApp:
                 if error_detail:
                     self.update_status("오류 발생", error_detail)
                     # 팝업은 한 번만 띄우거나, 특정 심각한 오류에만 띄우도록 조정 가능
-                    # 현재 로직은 "감시 실패" 또는 "오류"와 "Google"이 포함된 모든 메시지에 팝업을 띄움
-                    # 여기서는 상태 업데이트만 강화하고, 팝업 로직은 유지
                     try:
                         if "messagebox" not in msg.lower(): # 로그 자체에 messagebox 호출이 없는 경우만
-                             messagebox.showerror("오류 발생", f"{error_detail}\n\n상세 내용:\n{msg}", parent=self.root)
+                            self.show_enhanced_error_dialog(error_detail, msg)
                     except Exception:
                         pass # messagebox 호출 중 오류 발생 시 무시
         except queue.Empty:
@@ -529,17 +769,45 @@ class MessengerDocsApp:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_log_queue)
     def save_config(self):
-        config_data = { "watch_folder": self.watch_folder.get(), "docs_input": self.docs_input.get() }
+        config_data = { 
+            "watch_folder": self.watch_folder.get(), 
+            "docs_input": self.docs_input.get(),
+            "show_help_on_startup": self.show_help_on_startup.get(),
+            # 파일 필터링 설정 추가
+            "file_extensions": self.file_extensions.get(),
+            "use_regex_filter": self.use_regex_filter.get(),
+            "regex_pattern": self.regex_pattern.get(),
+            # 테마 설정 추가
+            "appearance_mode": self.appearance_mode.get()
+        }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
             self.log("설정 저장 완료.")
+            self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f: config_data = json.load(f)
-                self.watch_folder.set(config_data.get("watch_folder", "")); self.docs_input.set(config_data.get("docs_input", ""))
+                self.watch_folder.set(config_data.get("watch_folder", ""))
+                self.docs_input.set(config_data.get("docs_input", ""))
+                self.show_help_on_startup.set(config_data.get("show_help_on_startup", True))
+                
+                # 파일 필터링 설정 로드
+                self.file_extensions.set(config_data.get("file_extensions", ".txt"))
+                self.use_regex_filter.set(config_data.get("use_regex_filter", False))
+                self.regex_pattern.set(config_data.get("regex_pattern", ""))
+                
+                # 테마 설정 로드 및 적용
+                appearance_mode = config_data.get("appearance_mode", "System")
+                self.appearance_mode.set(appearance_mode)
+                ctk.set_appearance_mode(appearance_mode)
+                self.log(f"테마 설정 로드: {appearance_mode} 모드")
+                
                 self.log("저장된 설정 로드 완료.")
+                
+                # 설정 로드 후 상태 표시 업데이트
+                self.on_setting_changed()
             except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
         else: self.log("저장된 설정 파일 없음.")
     def start_monitoring(self):
@@ -558,6 +826,17 @@ class MessengerDocsApp:
             self.update_status("준비", "입력값 오류")
             return
         
+        # 설정 변경 사항이 있는 경우 저장 여부 확인
+        if self.settings_changed:
+            save_confirm = messagebox.askyesno(
+                "설정 저장 확인", 
+                "설정이 변경되었지만 저장되지 않았습니다.\n저장하시겠습니까?",
+                parent=self.root
+            )
+            if save_confirm:
+                self.save_config()
+                self.log("감시 시작 전 설정 자동 저장됨.")
+        
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
         docs_id = extract_google_id_from_url(docs_input_val)
@@ -571,7 +850,11 @@ class MessengerDocsApp:
         
         current_config = { 
             "watch_folder": watch_folder, 
-            "docs_id": docs_id 
+            "docs_id": docs_id,
+            # 파일 필터링 설정 추가
+            "file_extensions": self.file_extensions.get(),
+            "use_regex_filter": self.use_regex_filter.get(),
+            "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else ""
         }
         
         self.monitoring_thread = threading.Thread(
@@ -617,7 +900,11 @@ class MessengerDocsApp:
             for child in settings_frame.winfo_children():
                  if isinstance(child, ctk.CTkFrame):
                       for widget in child.winfo_children():
-                           if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="disabled")
+                           # "웹에서 열기" 버튼은 항상 활성화 상태로 유지
+                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "웹에서 열기":
+                               continue
+                           elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                               widget.configure(state="disabled")
         except (IndexError, AttributeError): pass # 위젯 구조 변경 또는 창 파괴 시 오류 무시
     def enable_settings_widgets(self):
         try:
@@ -628,6 +915,928 @@ class MessengerDocsApp:
                        for widget in child.winfo_children():
                             if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="normal")
         except (IndexError, AttributeError): pass
+
+    def show_help_dialog(self):
+        """초기 실행 시 도움말 표시"""
+        help_window = ctk.CTkToplevel(self.root)
+        help_window.title("메신저 Docs 자동 기록 - 시작 가이드")
+        help_window.geometry("600x500")
+        help_window.transient(self.root)  # 부모 창 위에 표시
+        help_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(help_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="메신저 Docs 자동 기록 사용 가이드", 
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 스크롤 가능한 텍스트 영역
+        help_text = ctk.CTkTextbox(main_frame, wrap="word", height=350)
+        help_text.pack(fill="both", expand=True, padx=10, pady=10)
+        help_text.insert("1.0", """
+📋 프로그램 개요
+이 프로그램은 특정 폴더에 저장되는 텍스트 파일(.txt)의 내용을 자동으로 감지하여 Google Docs 문서에 기록해주는 도구입니다.
+
+🔧 기본 설정 방법
+1. 감시 폴더: '폴더 선택...' 버튼을 클릭하여 텍스트 파일이 저장될 폴더를 지정합니다.
+   - 이 폴더에 새로운 .txt 파일이 생성되거나 기존 파일이 수정될 때 내용을 감지합니다.
+
+2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
+   - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
+   - 문서 ID만 직접 입력할 수 있습니다.
+   - '웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
+
+3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
+
+🚀 사용 방법
+1. '감시 시작' 버튼을 클릭하면 지정된 폴더의 감시가 시작됩니다.
+2. 감시 중에는 폴더 내 .txt 파일의 변경이 자동으로 감지됩니다.
+3. 감지된 새 내용은 Google Docs 문서의 맨 위에 타임스탬프와 함께 추가됩니다.
+4. '감시 중지' 버튼을 클릭하면 감시가 중단됩니다.
+
+🔔 트레이 아이콘 기능
+- 창을 닫아도 프로그램은 트레이 아이콘으로 계속 실행됩니다.
+- 트레이 아이콘을 우클릭하여 창 보이기/숨기기 또는 프로그램 종료가 가능합니다.
+
+📝 로그 확인
+- 프로그램 하단의 로그 창에서 실시간 작업 내역을 확인할 수 있습니다.
+- '로그 폴더 열기' 버튼을 클릭하면 상세 로그 파일이 저장된 폴더를 열 수 있습니다.
+
+❓ 문제 해결
+- Google 인증 오류: 인증 파일이 올바르게 설치되었는지 확인하세요.
+- 연결 오류: 인터넷 연결 상태를 확인하세요.
+- 권한 오류: Google 계정에 문서 편집 권한이 있는지 확인하세요.
+        """)
+        help_text.configure(state="disabled")  # 읽기 전용으로 설정
+        
+        # 체크박스 (다음에 표시 여부)
+        checkbox_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        checkbox_frame.pack(fill="x", pady=(10, 0))
+        
+        show_on_startup_checkbox = ctk.CTkCheckBox(
+            checkbox_frame, 
+            text="프로그램 시작 시 이 도움말 표시",
+            variable=self.show_help_on_startup,
+            onvalue=True,
+            offvalue=False
+        )
+        show_on_startup_checkbox.pack(side="left", padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            main_frame, 
+            text="닫기", 
+            command=help_window.destroy,
+            width=100
+        )
+        close_button.pack(pady=(10, 0))
+        
+        # 창이 닫힐 때 설정 저장
+        def on_help_close():
+            self.settings_changed = True  # 설정 변경 플래그 설정
+            help_window.destroy()
+        
+        help_window.protocol("WM_DELETE_WINDOW", on_help_close)
+        
+        # 창 중앙 배치
+        help_window.update_idletasks()
+        width = help_window.winfo_width()
+        height = help_window.winfo_height()
+        x = (help_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (help_window.winfo_screenheight() // 2) - (height // 2)
+        help_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def show_enhanced_error_dialog(self, error_type, error_message):
+        """
+        개선된 오류 대화 상자를 표시합니다.
+        오류 유형에 따라 단계별 해결 방법을 제공합니다.
+        """
+        error_window = ctk.CTkToplevel(self.root)
+        error_window.title("오류 발생")
+        error_window.geometry("600x450")
+        error_window.transient(self.root)  # 부모 창 위에 표시
+        error_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(error_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 오류 아이콘 및 제목
+        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        # 오류 제목
+        title_label = ctk.CTkLabel(
+            header_frame, 
+            text=f"오류 발생: {error_type}", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#FF5252"  # 빨간색
+        )
+        title_label.pack(pady=(0, 5))
+        
+        # 구분선
+        separator = ctk.CTkFrame(main_frame, height=2, fg_color="#CCCCCC")
+        separator.pack(fill="x", pady=(0, 15))
+        
+        # 오류 내용 프레임
+        content_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True)
+        
+        # 오류 메시지
+        error_label = ctk.CTkLabel(
+            content_frame,
+            text="오류 내용:",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        error_label.pack(fill="x", anchor="w")
+        
+        # 오류 메시지 텍스트 박스
+        error_text = ctk.CTkTextbox(content_frame, height=80)
+        error_text.pack(fill="x", pady=(5, 15))
+        error_text.insert("1.0", error_message)
+        error_text.configure(state="disabled")  # 읽기 전용
+        
+        # 해결 방법 제목
+        solution_label = ctk.CTkLabel(
+            content_frame,
+            text="해결 방법:",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        solution_label.pack(fill="x", anchor="w")
+        
+        # 해결 방법 텍스트 박스
+        solution_text = ctk.CTkTextbox(content_frame, height=150)
+        solution_text.pack(fill="both", expand=True, pady=(5, 15))
+        
+        # 오류 유형에 따른 해결 방법
+        solution = ""
+        if "Google 인증 오류" in error_type:
+            solution = """1. 인터넷 연결 상태를 확인하세요.
+2. 'developer_credentials.json' 파일이 올바른 위치에 있는지 확인하세요.
+3. Google 계정에 로그인이 되어 있는지 확인하세요.
+4. 브라우저에서 Google 계정에 로그인한 후 다시 시도하세요.
+5. 토큰이 만료되었다면, 프로그램을 재시작하여 새로운 인증을 시도하세요.
+6. 계속 문제가 발생한다면, 'token.json' 파일을 삭제하고 다시 시도하세요."""
+        elif "Docs API 오류" in error_type:
+            solution = """1. Google Docs 문서 ID가 올바른지 확인하세요.
+2. 해당 Google Docs 문서에 대한 편집 권한이 있는지 확인하세요.
+3. Google API 할당량이 초과되었을 수 있습니다. 잠시 후 다시 시도하세요.
+4. 인터넷 연결 상태를 확인하세요.
+5. 브라우저에서 해당 문서에 직접 접근이 가능한지 확인하세요."""
+        elif "파일 접근 오류" in error_type:
+            solution = """1. 감시 중인 폴더가 존재하는지 확인하세요.
+2. 폴더에 대한 읽기 권한이 있는지 확인하세요.
+3. 다른 프로그램이 파일을 사용 중인지 확인하세요.
+4. 파일이 이동되거나 삭제되었을 수 있습니다. 파일 존재 여부를 확인하세요.
+5. 파일 경로에 특수 문자가 포함되어 있는지 확인하세요."""
+        elif "감시 시스템 오류" in error_type:
+            solution = """1. 감시 폴더가 올바르게 설정되었는지 확인하세요.
+2. 폴더 경로가 너무 길거나 특수 문자를 포함하고 있는지 확인하세요.
+3. 프로그램을 재시작하여 감시 시스템을 초기화하세요.
+4. 시스템 리소스(메모리, CPU)가 부족하지 않은지 확인하세요."""
+        else:
+            solution = """1. 인터넷 연결 상태를 확인하세요.
+2. 프로그램 설정이 올바른지 확인하세요.
+3. 프로그램을 재시작하여 다시 시도하세요.
+4. 오류가 계속되면 로그 파일을 확인하여 더 자세한 정보를 얻으세요.
+5. 필요한 경우 개발자에게 문의하세요."""
+        
+        solution_text.insert("1.0", solution)
+        solution_text.configure(state="disabled")  # 읽기 전용
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 로그 보기 버튼
+        log_button = ctk.CTkButton(
+            button_frame,
+            text="로그 폴더 열기",
+            command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs")),
+            width=120
+        )
+        log_button.pack(side="left", padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            button_frame,
+            text="닫기",
+            command=error_window.destroy,
+            width=120
+        )
+        close_button.pack(side="right", padx=10)
+        
+        # 창 중앙 배치
+        error_window.update_idletasks()
+        width = error_window.winfo_width()
+        height = error_window.winfo_height()
+        x = (error_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (error_window.winfo_screenheight() // 2) - (height // 2)
+        error_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def clear_log(self):
+        """로그 텍스트 지우기"""
+        try:
+            self.log_text.configure(state='normal')
+            self.log_text.delete("1.0", ctk.END)
+            self.log_text.configure(state='disabled')
+            self.log("로그 내용을 지웠습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"로그 지우기 실패: {e}", parent=self.root)
+    
+    def show_log_search_dialog(self):
+        """로그 검색 대화 상자 표시"""
+        search_window = ctk.CTkToplevel(self.root)
+        search_window.title("로그 검색")
+        search_window.geometry("400x150")
+        search_window.transient(self.root)  # 부모 창 위에 표시
+        search_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(search_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 검색어 입력
+        search_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        search_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(search_frame, text="검색어:").pack(side="left", padx=(0, 10))
+        search_var = ctk.StringVar()
+        search_entry = ctk.CTkEntry(search_frame, textvariable=search_var, width=250)
+        search_entry.pack(side="left", fill="x", expand=True)
+        search_entry.focus_set()  # 포커스 설정
+        
+        # 검색 옵션
+        options_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        options_frame.pack(fill="x", pady=(0, 15))
+        
+        case_sensitive_var = ctk.BooleanVar(value=False)
+        case_sensitive_check = ctk.CTkCheckBox(
+            options_frame, 
+            text="대소문자 구분", 
+            variable=case_sensitive_var
+        )
+        case_sensitive_check.pack(side="left", padx=(0, 15))
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(0, 0))
+        
+        # 검색 함수
+        def search_log():
+            search_text = search_var.get()
+            if not search_text:
+                messagebox.showinfo("알림", "검색어를 입력하세요.", parent=search_window)
+                return
+            
+            self.log_text.tag_remove("search", "1.0", ctk.END)  # 기존 검색 결과 제거
+            
+            # 대소문자 구분 옵션
+            if case_sensitive_var.get():
+                search_text = search_text  # 그대로 사용
+            else:
+                search_text = search_text.lower()  # 소문자로 변환
+            
+            self.log_text.configure(state='normal')
+            
+            # 검색 시작
+            start_pos = "1.0"
+            found_count = 0
+            
+            while True:
+                if not case_sensitive_var.get():
+                    # 대소문자 구분 없이 검색
+                    current_text = self.log_text.get("1.0", ctk.END).lower()
+                    pos = current_text.find(search_text, self.log_text.index(start_pos).split('.')[0])
+                else:
+                    # 대소문자 구분하여 검색
+                    pos = self.log_text.search(search_text, start_pos, stopindex=ctk.END)
+                
+                if not pos:
+                    break
+                
+                line, char = pos.split('.')
+                end_pos = f"{line}.{int(char) + len(search_text)}"
+                
+                # 검색 결과 강조 표시
+                self.log_text.tag_add("search", pos, end_pos)
+                self.log_text.tag_config("search", background="yellow", foreground="black")
+                
+                # 다음 검색 위치 설정
+                start_pos = end_pos
+                found_count += 1
+            
+            self.log_text.configure(state='disabled')
+            
+            # 검색 결과 표시
+            if found_count > 0:
+                messagebox.showinfo("검색 결과", f"{found_count}개의 결과를 찾았습니다.", parent=search_window)
+                # 첫 번째 검색 결과로 스크롤
+                self.log_text.see("search.first")
+            else:
+                messagebox.showinfo("검색 결과", "검색 결과가 없습니다.", parent=search_window)
+        
+        # 검색 버튼
+        search_button = ctk.CTkButton(
+            button_frame,
+            text="검색",
+            command=search_log,
+            width=100
+        )
+        search_button.pack(side="left", padx=(0, 10))
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            button_frame,
+            text="닫기",
+            command=search_window.destroy,
+            width=100
+        )
+        close_button.pack(side="right")
+        
+        # 엔터 키로 검색 실행
+        search_window.bind("<Return>", lambda event: search_log())
+        
+        # 창 중앙 배치
+        search_window.update_idletasks()
+        width = search_window.winfo_width()
+        height = search_window.winfo_height()
+        x = (search_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (search_window.winfo_screenheight() // 2) - (height // 2)
+        search_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def show_filter_settings(self):
+        """고급 파일 필터 설정 대화 상자"""
+        filter_window = ctk.CTkToplevel(self.root)
+        filter_window.title("고급 파일 필터 설정")
+        filter_window.geometry("500x350")
+        filter_window.transient(self.root)  # 부모 창 위에 표시
+        filter_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(filter_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 파일 확장자 필터 섹션
+        ext_frame = ctk.CTkFrame(main_frame)
+        ext_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            ext_frame, 
+            text="파일 확장자 필터", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ctk.CTkLabel(
+            ext_frame,
+            text="감시할 파일 확장자를 쉼표로 구분하여 입력하세요.\n예: .txt,.log,.md"
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ext_entry = ctk.CTkEntry(ext_frame, textvariable=self.file_extensions)
+        ext_entry.pack(fill="x", pady=5)
+        
+        # 미리 정의된 확장자 선택 버튼들
+        preset_frame = ctk.CTkFrame(ext_frame, fg_color="transparent")
+        preset_frame.pack(fill="x", pady=5)
+        
+        def add_extension(ext):
+            current = self.file_extensions.get().strip()
+            if not current:
+                self.file_extensions.set(ext)
+            else:
+                exts = [e.strip() for e in current.split(",")]
+                if ext not in exts:
+                    exts.append(ext)
+                    self.file_extensions.set(",".join(exts))
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".txt", 
+            width=60,
+            command=lambda: add_extension(".txt")
+        ).pack(side="left", padx=(0, 5))
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".log", 
+            width=60,
+            command=lambda: add_extension(".log")
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".md", 
+            width=60,
+            command=lambda: add_extension(".md")
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            preset_frame, 
+            text=".csv", 
+            width=60,
+            command=lambda: add_extension(".csv")
+        ).pack(side="left", padx=5)
+        
+        # 정규식 필터 섹션
+        regex_frame = ctk.CTkFrame(main_frame)
+        regex_frame.pack(fill="x", pady=(0, 15))
+        
+        regex_header = ctk.CTkFrame(regex_frame, fg_color="transparent")
+        regex_header.pack(fill="x")
+        
+        ctk.CTkLabel(
+            regex_header, 
+            text="정규식 필터", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(side="left", pady=(0, 5))
+        
+        regex_check = ctk.CTkCheckBox(
+            regex_header,
+            text="정규식 필터 사용",
+            variable=self.use_regex_filter,
+            onvalue=True,
+            offvalue=False
+        )
+        regex_check.pack(side="right")
+        
+        ctk.CTkLabel(
+            regex_frame,
+            text="파일 이름에 적용할 정규식 패턴을 입력하세요.\n예: ^log_\\d{8}\\.txt$ (log_날짜8자리.txt 형식 파일만 매칭)"
+        ).pack(anchor="w", pady=(0, 5))
+        
+        regex_entry = ctk.CTkEntry(regex_frame, textvariable=self.regex_pattern)
+        regex_entry.pack(fill="x", pady=5)
+        
+        # 테스트 섹션
+        test_frame = ctk.CTkFrame(main_frame)
+        test_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            test_frame, 
+            text="필터 테스트", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        test_input_frame = ctk.CTkFrame(test_frame, fg_color="transparent")
+        test_input_frame.pack(fill="x", pady=5)
+        
+        ctk.CTkLabel(test_input_frame, text="파일 이름:").pack(side="left", padx=(0, 5))
+        
+        test_filename_var = ctk.StringVar(value="example.txt")
+        test_filename_entry = ctk.CTkEntry(test_input_frame, textvariable=test_filename_var, width=200)
+        test_filename_entry.pack(side="left", fill="x", expand=True)
+        
+        test_result_var = ctk.StringVar(value="")
+        
+        def test_filter():
+            filename = test_filename_var.get().strip()
+            if not filename:
+                test_result_var.set("파일 이름을 입력하세요")
+                return
+                
+            # 확장자 필터 테스트
+            extensions = [ext.strip() for ext in self.file_extensions.get().split(",") if ext.strip()]
+            ext_match = any(filename.lower().endswith(ext.lower()) for ext in extensions) if extensions else True
+            
+            # 정규식 필터 테스트
+            regex_match = True
+            if self.use_regex_filter.get() and self.regex_pattern.get().strip():
+                try:
+                    import re
+                    pattern = re.compile(self.regex_pattern.get())
+                    regex_match = bool(pattern.search(filename))
+                except re.error:
+                    test_result_var.set("정규식 패턴 오류!")
+                    return
+            
+            # 최종 결과
+            if ext_match and regex_match:
+                test_result_var.set("✅ 매칭됨: 이 파일은 감시 대상입니다")
+            else:
+                test_result_var.set("❌ 매칭 안됨: 이 파일은 무시됩니다")
+        
+        ctk.CTkButton(
+            test_input_frame,
+            text="테스트",
+            width=80,
+            command=test_filter
+        ).pack(side="right", padx=(5, 0))
+        
+        test_result_label = ctk.CTkLabel(
+            test_frame,
+            textvariable=test_result_var,
+            font=ctk.CTkFont(weight="bold")
+        )
+        test_result_label.pack(fill="x", pady=5)
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 확인 버튼
+        ok_button = ctk.CTkButton(
+            button_frame,
+            text="확인",
+            command=filter_window.destroy,
+            width=100
+        )
+        ok_button.pack(side="right")
+        
+        # 창 중앙 배치
+        filter_window.update_idletasks()
+        width = filter_window.winfo_width()
+        height = filter_window.winfo_height()
+        x = (filter_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (filter_window.winfo_screenheight() // 2) - (height // 2)
+        filter_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # 초기 테스트 실행
+        filter_window.after(500, test_filter)
+
+    def toggle_theme(self):
+        """테마 모드 전환 (라이트/다크)"""
+        current_mode = ctk.get_appearance_mode()
+        new_mode = "Dark" if current_mode == "Light" else "Light"
+        ctk.set_appearance_mode(new_mode)
+        self.appearance_mode.set(new_mode)
+        self.log(f"테마 변경: {new_mode} 모드")
+        self.settings_changed = True
+    
+    def show_theme_settings(self):
+        """테마 설정 대화 상자"""
+        theme_window = ctk.CTkToplevel(self.root)
+        theme_window.title("테마 설정")
+        theme_window.geometry("400x250")
+        theme_window.transient(self.root)  # 부모 창 위에 표시
+        theme_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(theme_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="테마 설정", 
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 테마 모드 선택 프레임
+        mode_frame = ctk.CTkFrame(main_frame)
+        mode_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            mode_frame, 
+            text="테마 모드:", 
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # 라디오 버튼 변수
+        mode_var = ctk.StringVar(value=self.appearance_mode.get())
+        
+        # 라디오 버튼 생성
+        modes = [("시스템 설정 따름", "System"), ("라이트 모드", "Light"), ("다크 모드", "Dark")]
+        
+        for text, value in modes:
+            radio = ctk.CTkRadioButton(
+                mode_frame,
+                text=text,
+                value=value,
+                variable=mode_var
+            )
+            radio.pack(anchor="w", pady=5, padx=10)
+        
+        # 미리보기 프레임
+        preview_frame = ctk.CTkFrame(main_frame)
+        preview_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            preview_frame,
+            text="미리보기:",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # 미리보기 요소들
+        preview_elements = ctk.CTkFrame(preview_frame)
+        preview_elements.pack(fill="x", pady=5, padx=10)
+        
+        ctk.CTkButton(
+            preview_elements,
+            text="버튼",
+            width=80
+        ).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkEntry(
+            preview_elements,
+            width=120,
+            placeholder_text="입력 필드"
+        ).pack(side="left")
+        
+        # 버튼 프레임
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        # 적용 버튼
+        def apply_theme():
+            new_mode = mode_var.get()
+            if new_mode != self.appearance_mode.get():
+                self.appearance_mode.set(new_mode)
+                ctk.set_appearance_mode(new_mode)
+                self.log(f"테마 변경: {new_mode} 모드")
+                self.settings_changed = True
+            theme_window.destroy()
+        
+        apply_button = ctk.CTkButton(
+            button_frame,
+            text="적용",
+            command=apply_theme,
+            width=100
+        )
+        apply_button.pack(side="right", padx=(5, 0))
+        
+        # 취소 버튼
+        cancel_button = ctk.CTkButton(
+            button_frame,
+            text="취소",
+            command=theme_window.destroy,
+            width=100,
+            fg_color="gray"
+        )
+        cancel_button.pack(side="right", padx=5)
+        
+        # 창 중앙 배치
+        theme_window.update_idletasks()
+        width = theme_window.winfo_width()
+        height = theme_window.winfo_height()
+        x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (theme_window.winfo_screenheight() // 2) - (height // 2)
+        theme_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def backup_settings(self):
+        """현재 설정을 백업 파일로 저장"""
+        # 백업 파일 저장 대화 상자
+        backup_path = filedialog.asksaveasfilename(
+            title="설정 백업 저장",
+            defaultextension=".json",
+            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")],
+            initialfile=f"messenger_docs_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        
+        if not backup_path:
+            return  # 사용자가 취소함
+        
+        try:
+            # 현재 설정 데이터 수집
+            config_data = {
+                "watch_folder": self.watch_folder.get(),
+                "docs_input": self.docs_input.get(),
+                "show_help_on_startup": self.show_help_on_startup.get(),
+                "file_extensions": self.file_extensions.get(),
+                "use_regex_filter": self.use_regex_filter.get(),
+                "regex_pattern": self.regex_pattern.get(),
+                "appearance_mode": self.appearance_mode.get(),
+                # 백업 메타데이터
+                "backup_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "backup_version": "1.0"
+            }
+            
+            # 백업 파일 저장
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            
+            self.log(f"설정 백업 완료: {backup_path}")
+            messagebox.showinfo("백업 완료", f"설정이 성공적으로 백업되었습니다.\n{backup_path}", parent=self.root)
+        except Exception as e:
+            self.log(f"설정 백업 실패: {e}")
+            messagebox.showerror("백업 실패", f"설정 백업 중 오류가 발생했습니다.\n{e}", parent=self.root)
+    
+    def restore_settings(self):
+        """백업 파일에서 설정 복원"""
+        # 백업 파일 선택 대화 상자
+        backup_path = filedialog.askopenfilename(
+            title="설정 백업 파일 선택",
+            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")]
+        )
+        
+        if not backup_path:
+            return  # 사용자가 취소함
+        
+        try:
+            # 백업 파일 로드
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
+            
+            # 백업 버전 확인
+            if "backup_version" not in backup_data:
+                self.log("경고: 백업 파일에 버전 정보가 없습니다.")
+            
+            # 설정 복원 전 확인
+            confirm = messagebox.askyesno(
+                "설정 복원 확인",
+                f"백업 파일({os.path.basename(backup_path)})에서 설정을 복원하시겠습니까?\n\n"
+                f"백업 날짜: {backup_data.get('backup_date', '정보 없음')}\n\n"
+                "현재 설정이 모두 덮어쓰기됩니다.",
+                parent=self.root
+            )
+            
+            if not confirm:
+                return
+            
+            # 설정 복원
+            if "watch_folder" in backup_data:
+                self.watch_folder.set(backup_data["watch_folder"])
+            
+            if "docs_input" in backup_data:
+                self.docs_input.set(backup_data["docs_input"])
+            
+            if "show_help_on_startup" in backup_data:
+                self.show_help_on_startup.set(backup_data["show_help_on_startup"])
+            
+            if "file_extensions" in backup_data:
+                self.file_extensions.set(backup_data["file_extensions"])
+            
+            if "use_regex_filter" in backup_data:
+                self.use_regex_filter.set(backup_data["use_regex_filter"])
+            
+            if "regex_pattern" in backup_data:
+                self.regex_pattern.set(backup_data["regex_pattern"])
+            
+            if "appearance_mode" in backup_data:
+                appearance_mode = backup_data["appearance_mode"]
+                self.appearance_mode.set(appearance_mode)
+                ctk.set_appearance_mode(appearance_mode)
+            
+            # 설정 변경 플래그 설정 및 상태 업데이트
+            self.settings_changed = True
+            self.on_setting_changed()
+            
+            self.log(f"설정 복원 완료: {backup_path}")
+            messagebox.showinfo("복원 완료", "설정이 성공적으로 복원되었습니다.", parent=self.root)
+        except json.JSONDecodeError:
+            self.log(f"설정 복원 실패: 잘못된 JSON 형식 - {backup_path}")
+            messagebox.showerror("복원 실패", "유효하지 않은 백업 파일입니다. JSON 형식이 올바르지 않습니다.", parent=self.root)
+        except Exception as e:
+            self.log(f"설정 복원 실패: {e}")
+            messagebox.showerror("복원 실패", f"설정 복원 중 오류가 발생했습니다.\n{e}", parent=self.root)
+    
+    def show_backup_restore_dialog(self):
+        """백업 및 복원 대화 상자"""
+        backup_window = ctk.CTkToplevel(self.root)
+        backup_window.title("설정 백업 및 복원")
+        backup_window.geometry("400x300")
+        backup_window.transient(self.root)  # 부모 창 위에 표시
+        backup_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(backup_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="설정 백업 및 복원", 
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 설명
+        description = ctk.CTkLabel(
+            main_frame,
+            text="현재 설정을 백업하거나 이전에 백업한 설정을 복원할 수 있습니다.",
+            wraplength=350
+        )
+        description.pack(pady=(0, 20))
+        
+        # 백업 섹션
+        backup_frame = ctk.CTkFrame(main_frame)
+        backup_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            backup_frame,
+            text="설정 백업",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(5, 10), padx=10)
+        
+        ctk.CTkLabel(
+            backup_frame,
+            text="현재 설정을 파일로 저장합니다.",
+            wraplength=350
+        ).pack(anchor="w", padx=10)
+        
+        ctk.CTkButton(
+            backup_frame,
+            text="설정 백업",
+            command=lambda: [backup_window.destroy(), self.backup_settings()],
+            width=120
+        ).pack(anchor="w", pady=10, padx=10)
+        
+        # 복원 섹션
+        restore_frame = ctk.CTkFrame(main_frame)
+        restore_frame.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            restore_frame,
+            text="설정 복원",
+            font=ctk.CTkFont(weight="bold")
+        ).pack(anchor="w", pady=(5, 10), padx=10)
+        
+        ctk.CTkLabel(
+            restore_frame,
+            text="백업 파일에서 설정을 불러옵니다.",
+            wraplength=350
+        ).pack(anchor="w", padx=10)
+        
+        ctk.CTkButton(
+            restore_frame,
+            text="설정 복원",
+            command=lambda: [backup_window.destroy(), self.restore_settings()],
+            width=120
+        ).pack(anchor="w", pady=10, padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            main_frame,
+            text="닫기",
+            command=backup_window.destroy,
+            width=100
+        )
+        close_button.pack(side="right", pady=(10, 0))
+        
+        # 창 중앙 배치
+        backup_window.update_idletasks()
+        width = backup_window.winfo_width()
+        height = backup_window.winfo_height()
+        x = (backup_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (backup_window.winfo_screenheight() // 2) - (height // 2)
+        backup_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def check_memory_usage(self):
+        """현재 프로세스의 메모리 사용량을 확인하고 표시"""
+        try:
+            # 현재 프로세스의 메모리 사용량 확인
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            
+            # MB 단위로 변환
+            memory_usage_mb = memory_info.rss / 1024 / 1024
+            
+            # 메모리 사용량 표시 업데이트
+            self.memory_usage.set(f"메모리: {memory_usage_mb:.1f} MB")
+            
+            # 메모리 사용량이 너무 높으면 경고
+            if memory_usage_mb > 200:  # 200MB 이상이면 경고
+                self.log(f"경고: 메모리 사용량이 높습니다 ({memory_usage_mb:.1f} MB). 프로그램을 재시작하는 것이 좋습니다.")
+                
+                # 메모리 사용량이 매우 높으면 자동 최적화 시도
+                if memory_usage_mb > 300:  # 300MB 이상이면 강제 최적화
+                    self.log("메모리 사용량이 매우 높습니다. 자동 최적화를 시도합니다.")
+                    self.optimize_memory()
+        except Exception as e:
+            print(f"메모리 사용량 확인 중 오류: {e}")
+        finally:
+            # 주기적으로 메모리 사용량 확인
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                self.root.after(self.memory_check_interval, self.check_memory_usage)
+    
+    def optimize_memory(self):
+        """메모리 사용량 최적화 시도"""
+        try:
+            # 1. 로그 텍스트 최적화
+            if hasattr(self, 'log_text') and self.root.winfo_exists():
+                self.log_text.configure(state='normal')
+                # 로그 텍스트를 더 적극적으로 정리 (최근 200줄만 유지)
+                log_content = self.log_text.get("1.0", ctk.END)
+                lines = log_content.split('\n')
+                if len(lines) > 200:
+                    lines_to_keep = lines[-200:]
+                    self.log_text.delete("1.0", ctk.END)
+                    self.log_text.insert("1.0", "\n".join(lines_to_keep) + "\n")
+                    self.log_text.insert("1.0", "--- 메모리 최적화: 로그가 정리되었습니다 ---\n\n")
+                self.log_text.configure(state='disabled')
+            
+            # 2. 가비지 컬렉션 강제 실행
+            import gc
+            gc.collect()
+            
+            # 3. 최적화 후 메모리 사용량 다시 확인
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_usage_mb = memory_info.rss / 1024 / 1024
+            self.log(f"메모리 최적화 완료. 현재 메모리 사용량: {memory_usage_mb:.1f} MB")
+            
+            # 메모리 사용량 표시 업데이트
+            self.memory_usage.set(f"메모리: {memory_usage_mb:.1f} MB")
+        except Exception as e:
+            print(f"메모리 최적화 중 오류: {e}")
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
