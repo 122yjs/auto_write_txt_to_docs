@@ -273,17 +273,35 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
             google_services = get_google_services(log_func_threadsafe)
             if google_services and 'docs' in google_services:
                 log_func_threadsafe("백엔드: Google Docs 서비스 로드 완료.")
-                backend_logger.info("Google Docs 서비스 로드 완료")
-            elif google_services:
-                 log_func_threadsafe("경고: Google Docs 서비스 로드 실패.")
-                 backend_logger.warning("Google Docs 서비스 로드 실패")
-            else: 
-                log_func_threadsafe("경고: Google 서비스 로드 실패.")
-                backend_logger.error("Google 서비스 로드 실패")
-        except Exception as e: 
-            log_func_threadsafe(f"오류: Google 서비스 초기화 예외 - {e}")
-            backend_logger.error(f"Google 서비스 초기화 예외: {e}")
-    else: log_func_threadsafe("경고: Google 연동 비활성화 (인증 정보 없음 또는 모듈 로드 실패).")
+                backend_logger.info("Google Docs 서비스 로드 완료.")
+            elif google_services: # Docs 서비스는 있지만 'docs' 키가 없는 경우 (일반적으로 발생하지 않음)
+                 log_func_threadsafe("경고: Google Docs 특정 서비스 로드 실패. API 설정 확인 필요.")
+                 backend_logger.warning("Google Docs 특정 서비스 로드 실패 (docs 키 부재).")
+                 # Docs 사용 불가이므로, 감시를 계속할지 여부 결정 필요. 여기서는 일단 진행.
+            else: # google_services 자체가 None인 경우 (인증 실패 등)
+                error_msg = "오류: Google 서비스 로드 실패. Google API 인증에 문제가 있을 수 있습니다. "\
+                            "'developer_credentials.json' 파일이 올바르지 않거나, 네트워크 연결, 또는 Google 계정 권한을 확인해주세요."
+                log_func_threadsafe(error_msg)
+                backend_logger.error("Google 서비스 로드 실패 (google_services is None). 인증 또는 네트워크 문제 가능성.")
+                # Google 서비스 없이 파일 감시만 계속할 수도 있지만, 이 프로그램의 핵심 기능이므로
+                # 사용자에게 명확히 알리고, 여기서는 Docs 업데이트 없이 감시만 진행될 수 있음을 인지시켜야 함.
+                # 또는, 여기서 감시를 시작하지 않고 종료할 수도 있습니다.
+                # 현재는 Docs 서비스 없이 계속 진행하도록 되어있으므로, process_file 함수에서 docs_service가 None일 때의 처리가 중요합니다.
+        except Exception as e: # get_google_services() 호출 중 발생한 예외
+            error_msg = f"오류: Google 서비스 초기화 중 예외 발생 - {e}. "\
+                        "인증 설정, 네트워크 연결 또는 API 할당량을 확인하세요."
+            log_func_threadsafe(error_msg)
+            backend_logger.error(f"Google 서비스 초기화 중 예외: {e}", exc_info=True)
+    else: # get_google_services 함수 자체가 없는 경우 (ImportError 등)
+        log_func_threadsafe("경고: Google 연동 기능 비활성화됨 (google_auth 모듈 로드 실패).")
+        backend_logger.warning("Google 연동 기능 비활성화 (google_auth 모듈 로드 실패).")
+
+    # Docs 서비스가 준비되지 않았다면, 사용자에게 알리고 처리를 어떻게 할지 명확히 해야 합니다.
+    # 예를 들어, Docs ID가 설정되어 있는데 Docs 서비스가 없다면 경고를 더 강하게 표시할 수 있습니다.
+    if config.get('docs_id') and (not google_services or 'docs' not in google_services):
+        log_func_threadsafe("경고: Google Docs ID가 설정되어 있으나, Docs 서비스에 연결할 수 없습니다. 기록이 비활성화됩니다.")
+        backend_logger.warning("Docs ID는 있으나 Docs 서비스 연결 불가. 기록 비활성화.")
+
 
     event_handler = TxtFileEventHandler(log_func_threadsafe)
     observer = Observer()
