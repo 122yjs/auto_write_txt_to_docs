@@ -58,6 +58,7 @@ class MessengerDocsApp:
         # --- 변수 선언 ---
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
+        self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -77,6 +78,7 @@ class MessengerDocsApp:
         # 설정 변수 변경 감지를 위한 추적
         self.watch_folder.trace('w', self.on_setting_changed)
         self.docs_input.trace('w', self.on_setting_changed)
+        self.show_help_on_startup.trace('w', self.on_setting_changed)
         self.settings_changed = False
 
         # --- 아이콘 이미지 생성 또는 로드 ---
@@ -108,6 +110,10 @@ class MessengerDocsApp:
 
         # --- 인증 파일 확인 ---
         self.check_credentials_file()
+        
+        # --- 도움말 표시 (설정에 따라) ---
+        if self.show_help_on_startup.get():
+            self.root.after(800, self.show_help_dialog)  # 0.8초 후 도움말 표시
 
 
     def check_credentials_file(self):
@@ -244,8 +250,29 @@ class MessengerDocsApp:
             traceback.print_exc()
     
     def on_setting_changed(self, *args):
-        """설정 변경 감지"""
+        """설정 변경 감지 및 상태 표시 업데이트"""
         self.settings_changed = True
+        
+        # 감시 폴더 정보 업데이트
+        folder_path = self.watch_folder.get().strip()
+        if folder_path:
+            folder_name = os.path.basename(folder_path) or folder_path
+            self.folder_info_var.set(f"폴더: {folder_name}")
+        else:
+            self.folder_info_var.set("폴더: 설정되지 않음")
+            
+        # Docs 문서 정보 업데이트
+        docs_input = self.docs_input.get().strip()
+        if docs_input:
+            # URL에서 ID 추출
+            docs_id = extract_google_id_from_url(docs_input)
+            if len(docs_id) > 12:  # ID가 너무 길면 줄임
+                docs_id_display = docs_id[:10] + "..."
+            else:
+                docs_id_display = docs_id
+            self.docs_info_var.set(f"문서: {docs_id_display}")
+        else:
+            self.docs_info_var.set("문서: 설정되지 않음")
     
     def validate_inputs(self):
         """입력값 유효성 검사"""
@@ -349,9 +376,29 @@ class MessengerDocsApp:
         
         # 상태 표시 프레임
         status_frame = ctk.CTkFrame(main_frame); status_frame.pack(pady=(0,10), padx=10, fill="x")
-        ctk.CTkLabel(status_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(10,5), pady=5)
-        self.status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
-        self.status_label.pack(side="left", padx=5, pady=5)
+        
+        # 상태 표시 (왼쪽)
+        status_left_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        status_left_frame.pack(side="left", fill="y", padx=10, pady=5)
+        ctk.CTkLabel(status_left_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0,5))
+        self.status_label = ctk.CTkLabel(status_left_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
+        self.status_label.pack(side="left", padx=5)
+        
+        # 현재 감시 정보 표시 (오른쪽)
+        status_right_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        status_right_frame.pack(side="right", fill="y", padx=10, pady=5)
+        
+        # 감시 폴더 표시
+        self.folder_info_var = ctk.StringVar(value="폴더: 설정되지 않음")
+        self.folder_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.folder_info_var, 
+                                             font=ctk.CTkFont(size=12))
+        self.folder_info_label.pack(side="top", anchor="e")
+        
+        # Docs 문서 표시
+        self.docs_info_var = ctk.StringVar(value="문서: 설정되지 않음")
+        self.docs_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.docs_info_var, 
+                                           font=ctk.CTkFont(size=12))
+        self.docs_info_label.pack(side="top", anchor="e")
         
         settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
         ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
@@ -556,11 +603,9 @@ class MessengerDocsApp:
                 if error_detail:
                     self.update_status("오류 발생", error_detail)
                     # 팝업은 한 번만 띄우거나, 특정 심각한 오류에만 띄우도록 조정 가능
-                    # 현재 로직은 "감시 실패" 또는 "오류"와 "Google"이 포함된 모든 메시지에 팝업을 띄움
-                    # 여기서는 상태 업데이트만 강화하고, 팝업 로직은 유지
                     try:
                         if "messagebox" not in msg.lower(): # 로그 자체에 messagebox 호출이 없는 경우만
-                             messagebox.showerror("오류 발생", f"{error_detail}\n\n상세 내용:\n{msg}", parent=self.root)
+                            self.show_enhanced_error_dialog(error_detail, msg)
                     except Exception:
                         pass # messagebox 호출 중 오류 발생 시 무시
         except queue.Empty:
@@ -571,17 +616,27 @@ class MessengerDocsApp:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_log_queue)
     def save_config(self):
-        config_data = { "watch_folder": self.watch_folder.get(), "docs_input": self.docs_input.get() }
+        config_data = { 
+            "watch_folder": self.watch_folder.get(), 
+            "docs_input": self.docs_input.get(),
+            "show_help_on_startup": self.show_help_on_startup.get()
+        }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
             self.log("설정 저장 완료.")
+            self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f: config_data = json.load(f)
-                self.watch_folder.set(config_data.get("watch_folder", "")); self.docs_input.set(config_data.get("docs_input", ""))
+                self.watch_folder.set(config_data.get("watch_folder", ""))
+                self.docs_input.set(config_data.get("docs_input", ""))
+                self.show_help_on_startup.set(config_data.get("show_help_on_startup", True))
                 self.log("저장된 설정 로드 완료.")
+                
+                # 설정 로드 후 상태 표시 업데이트
+                self.on_setting_changed()
             except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
         else: self.log("저장된 설정 파일 없음.")
     def start_monitoring(self):
@@ -599,6 +654,17 @@ class MessengerDocsApp:
             messagebox.showerror("입력 오류", full_error_message, parent=self.root)
             self.update_status("준비", "입력값 오류")
             return
+        
+        # 설정 변경 사항이 있는 경우 저장 여부 확인
+        if self.settings_changed:
+            save_confirm = messagebox.askyesno(
+                "설정 저장 확인", 
+                "설정이 변경되었지만 저장되지 않았습니다.\n저장하시겠습니까?",
+                parent=self.root
+            )
+            if save_confirm:
+                self.save_config()
+                self.log("감시 시작 전 설정 자동 저장됨.")
         
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
@@ -674,6 +740,102 @@ class MessengerDocsApp:
                        for widget in child.winfo_children():
                             if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="normal")
         except (IndexError, AttributeError): pass
+
+    def show_help_dialog(self):
+        """초기 실행 시 도움말 표시"""
+        help_window = ctk.CTkToplevel(self.root)
+        help_window.title("메신저 Docs 자동 기록 - 시작 가이드")
+        help_window.geometry("600x500")
+        help_window.transient(self.root)  # 부모 창 위에 표시
+        help_window.grab_set()  # 모달 창으로 설정
+        
+        # 메인 프레임
+        main_frame = ctk.CTkFrame(help_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # 제목
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="메신저 Docs 자동 기록 사용 가이드", 
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # 스크롤 가능한 텍스트 영역
+        help_text = ctk.CTkTextbox(main_frame, wrap="word", height=350)
+        help_text.pack(fill="both", expand=True, padx=10, pady=10)
+        help_text.insert("1.0", """
+📋 프로그램 개요
+이 프로그램은 특정 폴더에 저장되는 텍스트 파일(.txt)의 내용을 자동으로 감지하여 Google Docs 문서에 기록해주는 도구입니다.
+
+🔧 기본 설정 방법
+1. 감시 폴더: '폴더 선택...' 버튼을 클릭하여 텍스트 파일이 저장될 폴더를 지정합니다.
+   - 이 폴더에 새로운 .txt 파일이 생성되거나 기존 파일이 수정될 때 내용을 감지합니다.
+
+2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
+   - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
+   - 문서 ID만 직접 입력할 수 있습니다.
+   - '웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
+
+3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
+
+🚀 사용 방법
+1. '감시 시작' 버튼을 클릭하면 지정된 폴더의 감시가 시작됩니다.
+2. 감시 중에는 폴더 내 .txt 파일의 변경이 자동으로 감지됩니다.
+3. 감지된 새 내용은 Google Docs 문서의 맨 위에 타임스탬프와 함께 추가됩니다.
+4. '감시 중지' 버튼을 클릭하면 감시가 중단됩니다.
+
+🔔 트레이 아이콘 기능
+- 창을 닫아도 프로그램은 트레이 아이콘으로 계속 실행됩니다.
+- 트레이 아이콘을 우클릭하여 창 보이기/숨기기 또는 프로그램 종료가 가능합니다.
+
+📝 로그 확인
+- 프로그램 하단의 로그 창에서 실시간 작업 내역을 확인할 수 있습니다.
+- '로그 폴더 열기' 버튼을 클릭하면 상세 로그 파일이 저장된 폴더를 열 수 있습니다.
+
+❓ 문제 해결
+- Google 인증 오류: 인증 파일이 올바르게 설치되었는지 확인하세요.
+- 연결 오류: 인터넷 연결 상태를 확인하세요.
+- 권한 오류: Google 계정에 문서 편집 권한이 있는지 확인하세요.
+        """)
+        help_text.configure(state="disabled")  # 읽기 전용으로 설정
+        
+        # 체크박스 (다음에 표시 여부)
+        checkbox_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        checkbox_frame.pack(fill="x", pady=(10, 0))
+        
+        show_on_startup_checkbox = ctk.CTkCheckBox(
+            checkbox_frame, 
+            text="프로그램 시작 시 이 도움말 표시",
+            variable=self.show_help_on_startup,
+            onvalue=True,
+            offvalue=False
+        )
+        show_on_startup_checkbox.pack(side="left", padx=10)
+        
+        # 닫기 버튼
+        close_button = ctk.CTkButton(
+            main_frame, 
+            text="닫기", 
+            command=help_window.destroy,
+            width=100
+        )
+        close_button.pack(pady=(10, 0))
+        
+        # 창이 닫힐 때 설정 저장
+        def on_help_close():
+            self.settings_changed = True  # 설정 변경 플래그 설정
+            help_window.destroy()
+        
+        help_window.protocol("WM_DELETE_WINDOW", on_help_close)
+        
+        # 창 중앙 배치
+        help_window.update_idletasks()
+        width = help_window.winfo_width()
+        height = help_window.winfo_height()
+        x = (help_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (help_window.winfo_screenheight() // 2) - (height // 2)
+        help_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
