@@ -25,6 +25,13 @@ except ImportError:
     messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
     run_monitoring = None # 함수 부재 처리
 
+# path_utils 임포트 (인증 파일 경로 확인용)
+try:
+    from src.auto_write_txt_to_docs.path_utils import BUNDLED_CREDENTIALS_FILE_STR
+except ImportError:
+    messagebox.showerror("모듈 오류", "경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
+    BUNDLED_CREDENTIALS_FILE_STR = None
+
 # --- 기본 설정 ---
 # 현재 파일(main_gui.py)의 디렉토리 -> 프로젝트 루트
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +104,45 @@ class MessengerDocsApp:
         # --- 초기화 완료 로그 ---
         self.log("애플리케이션 초기화 완료.")
         self.log("설정을 확인하고 '감시 시작' 버튼을 클릭하세요.")
+
+        # --- 인증 파일 확인 ---
+        self.check_credentials_file()
+
+
+    def check_credentials_file(self):
+        """ Google API 인증 파일 (developer_credentials.json) 존재 여부 확인 및 안내 """
+        if not BUNDLED_CREDENTIALS_FILE_STR:
+            self.log("오류: BUNDLED_CREDENTIALS_FILE_STR이 설정되지 않았습니다. path_utils.py를 확인하세요.")
+            messagebox.showwarning(
+                "설정 오류",
+                "프로그램 내부 설정(인증 파일 경로)에 문제가 있습니다.\n개발자에게 문의하세요.",
+                parent=self.root
+            )
+            return
+
+        # 실제 파일 존재 여부 확인
+        # BUNDLED_CREDENTIALS_FILE_STR은 절대 경로일 수도, 상대 경로일 수도 있습니다.
+        # path_utils.py의 get_bundled_credentials_path() 로직에 따라 결정됩니다.
+        # 여기서는 해당 경로 문자열을 그대로 사용합니다.
+        credentials_path = BUNDLED_CREDENTIALS_FILE_STR
+
+        # path_utils.py에서 get_bundled_credentials_path 함수가 print 하므로, 여기서도 로그를 남깁니다.
+        self.log(f"확인 중인 인증 파일 경로: {credentials_path}")
+
+        if not os.path.exists(credentials_path):
+            self.log(f"경고: 인증 파일({credentials_path})을 찾을 수 없습니다.")
+            messagebox.showwarning(
+                "인증 파일 누락",
+                f"Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
+                f"예상 경로: {credentials_path}\n\n"
+                "프로그램 사용을 위해서는 이 파일이 필요합니다.\n"
+                "README.md 파일의 '설정' 섹션을 참고하여 파일을 준비하고 올바른 위치에 배치해주세요.\n\n"
+                "개발 환경에서는 'src/auto_write_txt_to_docs/assets/' 폴더 안에, "
+                "빌드된 프로그램의 경우 실행 파일과 함께 배포된 'assets' 폴더 안에 있어야 합니다.",
+                parent=self.root
+            )
+        else:
+            self.log(f"정보: 인증 파일({credentials_path}) 확인 완료.")
 
 
     def create_default_icon(self):
@@ -260,9 +306,13 @@ class MessengerDocsApp:
             self.log(f"오류: 폴더 열기 실패 - {e}")
             messagebox.showerror("오류", f"폴더 열기 실패:\n{e}", parent=self.root)
     
-    def update_status(self, status_text):
-        """상태 표시 업데이트"""
-        self.status_var.set(status_text)
+    def update_status(self, status_text, detail_text=None):
+        """상태 표시 업데이트 (상세 내용 추가 가능)"""
+        if detail_text:
+            full_status = f"{status_text} ({detail_text})"
+        else:
+            full_status = status_text
+        self.status_var.set(full_status)
         self.root.update_idletasks()
 
     def create_widgets(self):
@@ -275,7 +325,18 @@ class MessengerDocsApp:
         self.status_label.pack(side="left", padx=5, pady=5)
         
         settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
-        ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,10))
+        ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
+
+        # 인증 파일 안내 라벨 추가
+        auth_file_info_label = ctk.CTkLabel(
+            settings_frame,
+            text="Google API 인증을 위해 'developer_credentials.json' 파일이 필요합니다.\n"
+                 "자세한 내용은 README.md 파일을 참고하세요.",
+            font=ctk.CTkFont(size=10),
+            justify="left",
+            text_color="gray" # 흐린 색상으로 표시
+        )
+        auth_file_info_label.pack(pady=(0,10), padx=10, anchor="w")
         
         # 감시 폴더 설정
         folder_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); folder_frame.pack(fill="x", padx=10, pady=5)
@@ -300,7 +361,20 @@ class MessengerDocsApp:
         
         # 로그 프레임
         log_frame = ctk.CTkFrame(main_frame); log_frame.pack(pady=10, padx=10, fill="both", expand=True); log_frame.configure(border_width=1)
-        ctk.CTkLabel(log_frame, text="로그", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
+
+        log_header_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_header_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(log_header_frame, text="로그", font=ctk.CTkFont(weight="bold")).pack(side="left")
+
+        # 로그 폴더 열기 버튼 추가
+        self.log_folder_button = ctk.CTkButton(
+            log_header_frame,
+            text="로그 폴더 열기",
+            width=100,
+            command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs"))
+        )
+        self.log_folder_button.pack(side="right", padx=(0,0)) # 오른쪽 정렬
+
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
@@ -408,27 +482,45 @@ class MessengerDocsApp:
                 self.log(msg)
                 
                 # 상태 메시지에 따른 상태 표시 업데이트
+                current_time_str = datetime.now().strftime('%H:%M:%S')
                 if "백엔드: 감시 시작" in msg:
-                    self.update_status("감시 중")
+                    self.update_status("감시 중", f"시작 시간: {current_time_str}")
                 elif "백엔드: 중지 신호 수신" in msg or "백엔드: 모든 작업 완료" in msg:
-                    self.update_status("중지됨")
+                    self.update_status("중지됨", f"중지 시간: {current_time_str}")
                 elif "처리 시작:" in msg:
                     filename = msg.split("처리 시작:")[-1].strip()
-                    self.update_status(f"처리 중: {filename}")
-                elif "처리 완료:" in msg:
-                    self.update_status("감시 중")
+                    self.update_status("처리 중", filename)
+                elif "처리 완료:" in msg: # 파일 처리 완료 후 다시 감시 중 상태로
+                    self.update_status("감시 중", f"마지막 확인: {current_time_str}")
                 elif "Google Docs 업데이트 완료" in msg:
-                    self.update_status("업데이트 완료")
-                    # 잠시 후 다시 감시 중 상태로 변경
-                    self.root.after(2000, lambda: self.update_status("감시 중") if self.is_monitoring else None)
+                    self.update_status("Docs 업데이트 완료", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
+                    if self.is_monitoring:
+                        self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
                 
-                # 감시 실패 메시지 감지 시 팝업 표시
-                if "감시 실패" in msg or ("오류" in msg and "Google" in msg):
+                # 오류 메시지 처리 강화
+                error_detail = None
+                if "오류: Google API 인증 실패" in msg or "오류: Google 서비스 초기화 예외" in msg or "인증 정보(토큰) 갱신 실패" in msg:
+                    error_detail = "Google 인증 오류"
+                elif "오류: Docs 업데이트 API 오류" in msg:
+                    error_detail = "Docs API 오류"
+                elif "오류: 파일 처리 중 사라짐" in msg:
+                    error_detail = "파일 접근 오류"
+                elif "감시 실패" in msg: # 일반적인 감시 실패
+                    error_detail = "감시 시스템 오류"
+                elif "오류:" in msg and "Google" in msg: # 기타 구글 관련 오류
+                    error_detail = "Google 연동 중 일반 오류"
+
+                if error_detail:
+                    self.update_status("오류 발생", error_detail)
+                    # 팝업은 한 번만 띄우거나, 특정 심각한 오류에만 띄우도록 조정 가능
+                    # 현재 로직은 "감시 실패" 또는 "오류"와 "Google"이 포함된 모든 메시지에 팝업을 띄움
+                    # 여기서는 상태 업데이트만 강화하고, 팝업 로직은 유지
                     try:
-                        messagebox.showerror("감시 실패", msg, parent=self.root)
-                        self.update_status("오류 발생")
+                        if "messagebox" not in msg.lower(): # 로그 자체에 messagebox 호출이 없는 경우만
+                             messagebox.showerror("오류 발생", f"{error_detail}\n\n상세 내용:\n{msg}", parent=self.root)
                     except Exception:
-                        pass
+                        pass # messagebox 호출 중 오류 발생 시 무시
         except queue.Empty:
             pass
         except Exception:
@@ -459,9 +551,11 @@ class MessengerDocsApp:
         self.update_status("입력값 검증 중...")
         validation_errors = self.validate_inputs()
         if validation_errors:
-            error_message = "\n".join([f"• {error}" for error in validation_errors])
-            messagebox.showerror("입력 오류", f"다음 문제를 해결해주세요:\n\n{error_message}", parent=self.root)
-            self.update_status("준비")
+            error_intro = "입력값에 다음 문제들이 있습니다. 확인 후 다시 시도해주세요:\n"
+            error_details = "\n".join([f"  - {error}" for error in validation_errors])
+            full_error_message = f"{error_intro}\n{error_details}"
+            messagebox.showerror("입력 오류", full_error_message, parent=self.root)
+            self.update_status("준비", "입력값 오류")
             return
         
         watch_folder = self.watch_folder.get().strip()

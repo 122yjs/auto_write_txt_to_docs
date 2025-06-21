@@ -55,12 +55,19 @@ def authenticate(log_func):
     # ⭐ 2. 사용자 출입 허가증 저장 파일 주소 가져오기 (path_utils에서) ⭐
     token_path = TOKEN_FILE_STR
 
-    # 신분증 파일이 실제로 존재하는지 확인
-    if not credentials_path or not os.path.exists(credentials_path):
-        error_msg = f"오류: 프로그램에 포함된 인증 파일({credentials_path})을 찾을 수 없습니다. 개발자에게 문의하세요."
-        log_func(error_msg)
-        auth_logger.error(error_msg)
-        return None  # 신분증 없이는 진행 불가
+    # 신분증 파일 경로 유효성 검사
+    if not credentials_path:
+        error_msg = "오류: Google API 인증에 필요한 프로그램 신분증 파일(developer_credentials.json)의 경로가 설정되지 않았습니다. path_utils.py 설정을 확인하세요."
+        log_func(error_msg) # GUI 및 파일 로그로 전달
+        auth_logger.critical(error_msg) # 백엔드 심각 오류 로그
+        return None
+
+    # 신분증 파일 존재 여부 확인
+    if not os.path.exists(credentials_path):
+        error_msg = f"오류: Google API 인증에 필요한 프로그램 신분증 파일({credentials_path})을 찾을 수 없습니다. README.md를 참고하여 파일을 올바른 위치에 배치해주세요."
+        log_func(error_msg) # GUI 및 파일 로그로 전달
+        auth_logger.critical(error_msg) # 백엔드 심각 오류 로그
+        return None
 
     auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path}")
     log_func(f"백엔드: Google 인증 확인 중... (토큰 저장소: {token_path})")
