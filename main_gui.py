@@ -52,7 +52,9 @@ class MessengerDocsApp:
         self.root.title("메신저 Docs 자동 기록 (트레이)")
         self.root.geometry("700x500")
 
-        ctk.set_appearance_mode("System")
+        # 테마 설정
+        self.appearance_mode = ctk.StringVar(value="System")
+        ctk.set_appearance_mode(self.appearance_mode.get())
         ctk.set_default_color_theme("blue")
 
         # --- 변수 선언 ---
