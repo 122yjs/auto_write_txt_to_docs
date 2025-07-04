@@ -62,3 +62,24 @@ auto_write_gui
 ## 라이선스
 
 MIT License
+
+## 배포 및 이미지(assets) 포함 방법
+
+프로그램을 exe 파일로 배포할 때, 인증서(`developer_credentials.json`)와 도움말 이미지(`manual.jpg`) 등 assets 폴더의 파일을 함께 포함해야 합니다.
+
+### PyInstaller로 exe 빌드 시 assets 포함
+
+1. assets 폴더에 필요한 파일(`developer_credentials.json`, `manual.jpg` 등)이 모두 들어 있는지 확인하세요.
+2. 아래와 같이 빌드 명령어에 `--add-data` 옵션을 추가합니다:
+
+   ```bash
+   pyinstaller main_gui.py --onefile --noconsole --add-data "src/auto_write_txt_to_docs/assets;assets"
+   ```
+   - Windows: 세미콜론(;) 사용, macOS/Linux: 콜론(:) 사용
+   - 빌드된 exe는 내부적으로 assets 폴더를 포함하며, 프로그램은 자동으로 해당 경로에서 파일을 찾습니다.
+
+3. 빌드 후 exe 파일과 함께 assets 폴더가 잘 포함되었는지, 실행 시 이미지와 인증서가 정상적으로 동작하는지 확인하세요.
+
+### 참고
+- assets 폴더 내의 `manual.jpg`는 'Google 인증 설정 마법사' 창에서 도움말 이미지로 자동 표시됩니다.
+- assets 폴더에 추가로 포함할 파일이 있다면 위와 같은 방식으로 함께 배포할 수 있습니다.
