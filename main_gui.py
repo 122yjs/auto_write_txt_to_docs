@@ -20,6 +20,7 @@ from pathlib import Path
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
 import pystray
+from PIL import ImageTk
 
 # backend_processor 임포트
 try:
@@ -1971,6 +1972,20 @@ class MessengerDocsApp:
         x = (wizard.winfo_screenwidth() // 2) - (w // 2)
         y = (wizard.winfo_screenheight() // 2) - (h // 2)
         wizard.geometry(f"{w}x{h}+{x}+{y}")
+
+        # manual.jpg 이미지 도움말 (info_label 아래 표시)
+        try:
+            from src.auto_write_txt_to_docs.path_utils import get_project_root
+            img_path = Path(get_project_root()) / "src" / "auto_write_txt_to_docs" / "assets" / "manual.jpg"
+            if img_path.exists():
+                img_pil = Image.open(img_path)
+                img_pil.thumbnail((500, 300))
+                img_ctk = ctk.CTkImage(light_image=img_pil, size=img_pil.size)
+                ctk.CTkLabel(frame, image=img_ctk, text="").pack(pady=(0, 15))
+            else:
+                self.log(f"manual.jpg 이미지를 찾을 수 없습니다: {img_path}")
+        except Exception as e:
+            self.log(f"manual.jpg 로드 실패: {e}")
 
     # ---------------- 메뉴바 생성 ----------------
     def _create_menubar(self):
