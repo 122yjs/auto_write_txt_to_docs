@@ -54,8 +54,11 @@ class MessengerDocsApp:
         self.root = root
         self.root.title("메신저 Docs 자동 기록 (트레이)")
         # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
-        self.root.geometry("900x600")
-        self.root.minsize(900, 600)
+        self.root.geometry("900x750")
+        self.root.minsize(900, 750)
+
+        # --- 상단 메뉴바 생성 ---
+        self._create_menubar()
 
         # 테마 설정
         self.appearance_mode = ctk.StringVar(value="System")
@@ -566,6 +569,19 @@ class MessengerDocsApp:
         self.log_clear_button.pack(side="right", padx=5) # 오른쪽 정렬
 
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
+
+        # --- 경로 저장 버튼 (설정 섹션 내부, 빠른 수동 저장) ---
+        path_save_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        path_save_frame.pack(fill="x", padx=10, pady=(0,10))
+
+        ctk.CTkButton(
+            path_save_frame,
+            text="경로 저장",
+            width=120,
+            command=self.save_config,
+            fg_color="#4CAF50",  # 녹색
+            hover_color="#45A049"
+        ).pack(side="right")
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
     def setup_tray_icon(self):
@@ -1955,6 +1971,26 @@ class MessengerDocsApp:
         x = (wizard.winfo_screenwidth() // 2) - (w // 2)
         y = (wizard.winfo_screenheight() // 2) - (h // 2)
         wizard.geometry(f"{w}x{h}+{x}+{y}")
+
+    # ---------------- 메뉴바 생성 ----------------
+    def _create_menubar(self):
+        """Tkinter 기본 Menu 위젯을 사용해 상단 메뉴바(설정)를 추가"""
+        menubar = tk.Menu(self.root)
+
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label="감시 폴더 선택", command=self.browse_folder)
+        settings_menu.add_command(label="Google 인증 설정 마법사", command=self.show_credentials_wizard)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="설정 저장", command=self.save_config)
+        settings_menu.add_command(label="설정 백업/복원", command=self.show_backup_restore_dialog)
+        settings_menu.add_command(label="테마 설정", command=self.show_theme_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="프로그램 종료", command=self.exit_application)
+
+        menubar.add_cascade(label="설정", menu=settings_menu)
+
+        # 추후 도움말 메뉴 등 추가 가능
+        self.root.config(menu=menubar)
 
 
 # --- 애플리케이션 실행 ---
