@@ -14,6 +14,8 @@ import logging
 import webbrowser
 from datetime import datetime
 import psutil  # 메모리 사용량 모니터링용
+import shutil
+from pathlib import Path
 
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
@@ -156,16 +158,18 @@ class MessengerDocsApp:
 
         if not os.path.exists(credentials_path):
             self.log(f"경고: 인증 파일({credentials_path})을 찾을 수 없습니다.")
-            messagebox.showwarning(
+            open_wizard = messagebox.askyesno(
                 "인증 파일 누락",
                 f"Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
                 f"예상 경로: {credentials_path}\n\n"
                 "프로그램 사용을 위해서는 이 파일이 필요합니다.\n"
-                "README.md 파일의 '설정' 섹션을 참고하여 파일을 준비하고 올바른 위치에 배치해주세요.\n\n"
-                "개발 환경에서는 'src/auto_write_txt_to_docs/assets/' 폴더 안에, "
-                "빌드된 프로그램의 경우 실행 파일과 함께 배포된 'assets' 폴더 안에 있어야 합니다.",
+                "README.md 파일의 '설정' 섹션을 참고하거나,\n"
+                "바로 이어서 'Google 인증 설정 마법사'를 통해 준비할 수 있습니다.\n\n"
+                "설정 마법사를 지금 열어 파일을 준비하시겠습니까?",
                 parent=self.root
             )
+            if open_wizard:
+                self.show_credentials_wizard()
         else:
             self.log(f"정보: 인증 파일({credentials_path}) 확인 완료.")
 
@@ -1841,6 +1845,107 @@ class MessengerDocsApp:
     def on_closing(self): # 창 닫기(X) 버튼 클릭 시 호출됨
         """ 창의 X 버튼 클릭 시 창 숨기기 """
         self.hide_window()
+
+    # --- 새로 추가: Google 인증 설정 마법사 ---
+    def show_credentials_wizard(self):
+        """Google Cloud Console 안내 및 credentials.json 복사를 돕는 설정 마법사"""
+        wizard = ctk.CTkToplevel(self.root)
+        wizard.title("Google 인증 설정 마법사")
+        wizard.geometry("600x420")
+        wizard.transient(self.root)
+        wizard.grab_set()
+
+        # 메인 프레임
+        frame = ctk.CTkFrame(wizard)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # 안내 라벨
+        info_label = ctk.CTkLabel(
+            frame,
+            text=(
+                "1) 'Google Cloud Console 열기'를 눌러 API를 활성화하고\n"
+                "   OAuth 데스크톱 애플리케이션 자격 증명(JSON)을 다운로드하세요.\n\n"
+                "2) 'JSON 파일 선택'을 눌러 다운로드한 파일을 선택하면\n"
+                "   프로그램이 자동으로 developer_credentials.json 으로 복사합니다.\n\n"
+                "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
+                "   프로그램을 다시 실행하거나 감시를 시작하세요."
+            ),
+            justify="left",
+            wraplength=540
+        )
+        info_label.pack(fill="x", pady=(0, 15))
+
+        # 버튼 영역
+        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(0, 10))
+
+        # Google Console 열기
+        console_btn = ctk.CTkButton(
+            btn_frame,
+            text="Google Cloud Console 열기",
+            command=lambda: webbrowser.open("https://console.cloud.google.com/")
+        )
+        console_btn.pack(fill="x", pady=5)
+
+        # 결과 라벨 (상태 표시)
+        result_label = ctk.CTkLabel(frame, text="JSON 파일을 아직 선택하지 않았습니다.")
+        result_label.pack(fill="x", pady=(10, 5))
+
+        # BUNDLED_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
+        if not BUNDLED_CREDENTIALS_FILE_STR:
+            messagebox.showerror(
+                "경로 오류",
+                "인증 파일 기본 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
+                parent=wizard
+            )
+            wizard.destroy()
+            return
+
+        credentials_target = Path(str(BUNDLED_CREDENTIALS_FILE_STR))
+
+        # JSON 선택 → 복사
+        def select_and_copy_json():
+            file_path = filedialog.askopenfilename(
+                title="credentials.json 선택",
+                filetypes=[("JSON 파일", "*.json")]
+            )
+            if not file_path:
+                return
+            try:
+                credentials_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(file_path, credentials_target)
+                self.log(f"인증 파일 복사 완료: {credentials_target}")
+                result_label.configure(text="복사 완료! 테스트 중...", text_color="green")
+                wizard.update_idletasks()
+                # 복사 후 바로 테스트
+                if credentials_target.exists():
+                    result_label.configure(text="테스트 성공! ✅ 인증 파일이 준비되었습니다.", text_color="green")
+                    # 즉시 재확인하여 메인 상태도 반영
+                    self.check_credentials_file()
+                else:
+                    result_label.configure(text="테스트 실패 ❌ 파일을 찾을 수 없습니다.", text_color="red")
+            except Exception as e:
+                self.log(f"인증 파일 복사 실패: {e}")
+                messagebox.showerror("복사 실패", str(e), parent=wizard)
+                result_label.configure(text="복사 실패 ❌", text_color="red")
+
+        json_btn = ctk.CTkButton(
+            btn_frame,
+            text="JSON 파일 선택",
+            command=select_and_copy_json
+        )
+        json_btn.pack(fill="x", pady=5)
+
+        # 닫기 버튼
+        close_btn = ctk.CTkButton(frame, text="닫기", command=wizard.destroy)
+        close_btn.pack(pady=(20, 0))
+
+        # 창 중앙 배치
+        wizard.update_idletasks()
+        w, h = wizard.winfo_width(), wizard.winfo_height()
+        x = (wizard.winfo_screenwidth() // 2) - (w // 2)
+        y = (wizard.winfo_screenheight() // 2) - (h // 2)
+        wizard.geometry(f"{w}x{h}+{x}+{y}")
 
 
 # --- 애플리케이션 실행 ---
