@@ -53,7 +53,9 @@ class MessengerDocsApp:
     def __init__(self, root):
         self.root = root
         self.root.title("메신저 Docs 자동 기록 (트레이)")
-        self.root.geometry("700x500")
+        # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
+        self.root.geometry("900x600")
+        self.root.minsize(900, 600)
 
         # 테마 설정
         self.appearance_mode = ctk.StringVar(value="System")
@@ -924,7 +926,8 @@ class MessengerDocsApp:
         """초기 실행 시 도움말 표시"""
         help_window = ctk.CTkToplevel(self.root)
         help_window.title("메신저 Docs 자동 기록 - 시작 가이드")
-        help_window.geometry("600x500")
+        help_window.geometry("750x650")
+        help_window.minsize(750, 650)
         help_window.transient(self.root)  # 부모 창 위에 표시
         help_window.grab_set()  # 모달 창으로 설정
         
@@ -1023,7 +1026,8 @@ class MessengerDocsApp:
         """
         error_window = ctk.CTkToplevel(self.root)
         error_window.title("오류 발생")
-        error_window.geometry("600x450")
+        error_window.geometry("750x550")
+        error_window.minsize(750, 550)
         error_window.transient(self.root)  # 부모 창 위에 표시
         error_window.grab_set()  # 모달 창으로 설정
         
@@ -1160,7 +1164,8 @@ class MessengerDocsApp:
         """로그 검색 대화 상자 표시"""
         search_window = ctk.CTkToplevel(self.root)
         search_window.title("로그 검색")
-        search_window.geometry("400x150")
+        search_window.geometry("500x200")
+        search_window.minsize(500, 200)
         search_window.transient(self.root)  # 부모 창 위에 표시
         search_window.grab_set()  # 모달 창으로 설정
         
@@ -1281,7 +1286,8 @@ class MessengerDocsApp:
         """고급 파일 필터 설정 대화 상자"""
         filter_window = ctk.CTkToplevel(self.root)
         filter_window.title("고급 파일 필터 설정")
-        filter_window.geometry("500x350")
+        filter_window.geometry("650x450")
+        filter_window.minsize(650, 450)
         filter_window.transient(self.root)  # 부모 창 위에 표시
         filter_window.grab_set()  # 모달 창으로 설정
         
@@ -1478,7 +1484,8 @@ class MessengerDocsApp:
         """테마 설정 대화 상자"""
         theme_window = ctk.CTkToplevel(self.root)
         theme_window.title("테마 설정")
-        theme_window.geometry("400x250")
+        theme_window.geometry("500x300")
+        theme_window.minsize(500, 300)
         theme_window.transient(self.root)  # 부모 창 위에 표시
         theme_window.grab_set()  # 모달 창으로 설정
         
@@ -1696,7 +1703,8 @@ class MessengerDocsApp:
         """백업 및 복원 대화 상자"""
         backup_window = ctk.CTkToplevel(self.root)
         backup_window.title("설정 백업 및 복원")
-        backup_window.geometry("400x300")
+        backup_window.geometry("550x400")
+        backup_window.minsize(550, 400)
         backup_window.transient(self.root)  # 부모 창 위에 표시
         backup_window.grab_set()  # 모달 창으로 설정
         
@@ -1851,7 +1859,8 @@ class MessengerDocsApp:
         """Google Cloud Console 안내 및 credentials.json 복사를 돕는 설정 마법사"""
         wizard = ctk.CTkToplevel(self.root)
         wizard.title("Google 인증 설정 마법사")
-        wizard.geometry("600x420")
+        wizard.geometry("700x500")
+        wizard.minsize(700, 500)
         wizard.transient(self.root)
         wizard.grab_set()
 
