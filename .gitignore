@@ -13,8 +13,10 @@ ENV/
 # Distribution / packaging
 .Python
 build/
+build_release/
 develop-eggs/
 dist/
+release/
 downloads/
 eggs/
 .eggs/

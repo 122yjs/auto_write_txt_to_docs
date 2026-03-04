@@ -82,6 +82,34 @@ auto_write_gui
 
 ## 🚀 실행 방법
 
+## 📦 배포 방법 (Windows)
+
+### exe + portable zip 만들기
+이 프로젝트는 Windows 기준으로 **PyInstaller onedir 빌드**를 권장합니다. `onefile`보다 의존성 누락과 실행 파일 오탐 문제가 적습니다.
+
+1. PowerShell에서 프로젝트 루트로 이동합니다.
+2. 아래 스크립트를 실행합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
+```
+
+3. 빌드가 끝나면 아래 산출물이 생성됩니다.
+   - exe 폴더: `dist\MessengerDocsAutoWriter\`
+   - 배포 zip: `release\MessengerDocsAutoWriter-win64-portable.zip`
+
+### 배포물에 포함되는 내용
+- 실행 파일과 Python 런타임 의존성
+- `assets\developer_credentials.json`
+- `README.md`
+- `config.json.example`
+- `added_lines_cache.json.example`
+
+### 배포 전 확인 사항
+- `developer_credentials.json` 이 올바른 Google Cloud 프로젝트용인지 확인하세요.
+- `새 문서 만들기` / `문서 목록` 기능을 쓸 경우 같은 프로젝트에서 **Google Drive API** 도 활성화되어 있어야 합니다.
+- 첫 실행 후 생성되는 `token.json` 은 사용자 PC의 `%APPDATA%\\MessengerDocsAutoWriter\\cache\\` 아래에 저장됩니다.
+
 ## 라이선스
 
 MIT License
