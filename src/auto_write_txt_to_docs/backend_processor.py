@@ -29,7 +29,7 @@ except ImportError:
 
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
-processed_file_states = {} # 파일별 마지막 처리 상태 (크기, 시간) - 메모리 기반
+processed_file_states = {} # 파일별 마지막 처리 상태 (성공 size, 최근 시도 시간) - 메모리 기반
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 RETRY_DELAY = 5.0
@@ -320,11 +320,12 @@ def process_file(filepath, config, services, log_func):
     
     # 처리 시작 시간 기록 및 중복 실행 방지
     current_time = time.time()
-    last_processed_time = processed_file_states.get(filepath, {}).get('timestamp', 0)
+    last_processed_time = get_last_attempt_time(filepath)
     if current_time - last_processed_time < PROCESSING_DELAY:
         backend_logger.debug(f"짧은 시간 내 재처리 방지: {os.path.basename(filepath)}")
         return # 짧은 시간 내 재처리 방지
 
+    mark_processing_attempt(filepath, current_time)
     log_func(f"처리 시작: {os.path.basename(filepath)}")
     backend_logger.info(f"파일 처리 시작: {filepath}")
     # 필요한 서비스 및 설정 가져오기
@@ -346,24 +347,20 @@ def process_file(filepath, config, services, log_func):
                 backend_logger.info(f"파일 크기 감소로 인해 '{os.path.basename(filepath)}'의 인코딩 정보 초기화")
                 del file_encodings[filepath]
             new_raw_content = read_file_with_multiple_encodings(filepath, 0, log_func)
-            last_size = 0 # 크기 감소 시, 다음번 비교 위해 last_size 초기화
         else: # 크기 변경 없음
-            processed_file_states.setdefault(filepath, {})['timestamp'] = current_time # 시간만 갱신
             return
 
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
-            processed_file_states.setdefault(filepath, {})['size'] = current_size
-            processed_file_states[filepath]['timestamp'] = current_time
+            mark_file_processed(filepath, current_size, current_time)
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
         if not new_lines:
-             backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
-             processed_file_states.setdefault(filepath, {})['size'] = current_size
-             processed_file_states[filepath]['timestamp'] = current_time
-             return
+            backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
+            mark_file_processed(filepath, current_size, current_time)
+            return
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
         global added_lines_cache
@@ -371,52 +368,51 @@ def process_file(filepath, config, services, log_func):
 
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
-            processed_file_states.setdefault(filepath, {})['size'] = current_size
-            processed_file_states[filepath]['timestamp'] = current_time
+            mark_file_processed(filepath, current_size, current_time)
             return
 
         filtered_content = "\n".join(truly_new_lines) # Docs에 추가할 실제 내용
 
         # --- 3. Google Docs 업데이트 ---
-        docs_update_successful = False
-        if docs_id and docs_service:
-            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
-            # 강조된 헤더 준비
-            header = (f"\n{'#' * 60}\n# 새 업데이트: {timestamp_str}\n{'#' * 60}\n")
-            text_to_insert = header + filtered_content + "\n\n" # 헤더 + 내용 + 공백
+        if not docs_id:
+            schedule_retry(filepath, log_func, "Google Docs 문서 ID가 없습니다", current_time)
+            return
 
-            log_func(f"  - Google Docs에 {len(truly_new_lines)}줄 추가 시도 (ID: {docs_id})...")
-            try:
-                # 단일 insertText 요청 사용
-                requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': text_to_insert}}]
-                docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
-                log_func(f"  - Google Docs 업데이트 완료.")
-                backend_logger.info(f"Google Docs 업데이트 완료: {len(truly_new_lines)}줄 추가")
-                docs_update_successful = True
-            except HttpError as error:
-                log_func(f"오류: Docs 업데이트 API 오류 - {error}")
-                backend_logger.error(f"Docs 업데이트 API 오류: {error}")
-                # Docs 업데이트 실패 시, 라인 캐시 및 파일 상태 업데이트 안 함 (다음번 재시도 유도)
-                return
-            except Exception as e:
-                log_func(f"오류: Docs 업데이트 중 예외 발생 - {e}")
-                backend_logger.error(f"Docs 업데이트 중 예외 발생: {e}", exc_info=True)
-                log_func(traceback.format_exc())
-                return
-        else:
-             log_func("  - Google Docs 업데이트를 건너<0xEB><0x9A><0x8D>니다 (ID 또는 서비스 없음).")
-             # Docs 사용 안 할 경우, 이후 처리를 계속할지 결정 필요. 여기서는 일단 종료.
-             # 만약 Docs 외 다른 작업(로깅 등)이 중요하다면 여기서 return 제거.
+        if not docs_service:
+            schedule_retry(filepath, log_func, "Google Docs 서비스가 준비되지 않았습니다", current_time)
+            return
+
+        timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
+        # 강조된 헤더 준비
+        header = (f"\n{'#' * 60}\n# 새 업데이트: {timestamp_str}\n{'#' * 60}\n")
+        text_to_insert = header + filtered_content + "\n\n" # 헤더 + 내용 + 공백
+
+        log_func(f"  - Google Docs에 {len(truly_new_lines)}줄 추가 시도 (ID: {docs_id})...")
+        try:
+            # 단일 insertText 요청 사용
+            requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': text_to_insert}}]
+            docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
+            log_func(f"  - Google Docs 업데이트 완료.")
+            backend_logger.info(f"Google Docs 업데이트 완료: {len(truly_new_lines)}줄 추가")
+        except HttpError as error:
+            log_func(f"오류: Docs 업데이트 API 오류 - {error}")
+            backend_logger.error(f"Docs 업데이트 API 오류: {error}")
+            schedule_retry(filepath, log_func, "Google Docs API 오류", current_time)
+            return
+        except Exception as e:
+            log_func(f"오류: Docs 업데이트 중 예외 발생 - {e}")
+            backend_logger.error(f"Docs 업데이트 중 예외 발생: {e}", exc_info=True)
+            log_func(traceback.format_exc())
+            schedule_retry(filepath, log_func, "Google Docs 업데이트 예외", current_time)
+            return
 
         # --- 4. 라인 캐시 업데이트 (Docs 업데이트 성공 시) ---
-        if docs_update_successful:
-            backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
-            for line in truly_new_lines:
-                added_lines_cache.add(line)
+        backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
+        for line in truly_new_lines:
+            added_lines_cache.add(line)
 
         # --- 5. 최종 상태 업데이트 ---
-        processed_file_states.setdefault(filepath, {})['size'] = current_size
-        processed_file_states[filepath]['timestamp'] = current_time # 처리 완료 시간
+        mark_file_processed(filepath, current_size, current_time)
         log_func(f"처리 완료: {os.path.basename(filepath)}")
         backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
 
@@ -434,7 +430,7 @@ def process_file(filepath, config, services, log_func):
 # --- 메인 모니터링 함수 ---
 def run_monitoring(config, log_func_threadsafe, stop_event):
     """ 백그라운드에서 폴더 감시 및 파일 처리를 실행하는 메인 루프 """
-    watch_folder = config.get('watch_folder'); credentials_path = config.get('credentials_path')
+    watch_folder = config.get('watch_folder')
     
     # 백엔드 로깅 시스템 초기화
     backend_logger = setup_backend_logging()
