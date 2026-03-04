@@ -29,7 +29,7 @@ except ImportError:
 
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
-processed_file_states = {} # 파일별 마지막 처리 상태 (성공 size, 최근 시도 시간) - 메모리 기반
+processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트 오프셋, 최근 시도 시간) - 메모리 기반
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 RETRY_DELAY = 5.0
@@ -79,6 +79,12 @@ def get_last_attempt_time(filepath):
     return state.get('last_attempt_time', state.get('timestamp', 0))
 
 
+def get_last_successful_offset(filepath):
+    """마지막으로 안전하게 처리된 바이트 오프셋을 반환합니다."""
+    state = processed_file_states.get(filepath, {})
+    return state.get('last_byte_offset', state.get('size', 0))
+
+
 def mark_processing_attempt(filepath, current_time):
     """처리 시도 시각만 갱신합니다."""
     state = get_file_state(filepath)
@@ -87,10 +93,11 @@ def mark_processing_attempt(filepath, current_time):
         del state['timestamp']
 
 
-def mark_file_processed(filepath, current_size, current_time):
-    """파일이 안전하게 처리된 후 상태를 확정합니다."""
+def mark_file_processed(filepath, current_byte_offset, current_time):
+    """파일이 안전하게 처리된 후 바이트 오프셋 상태를 확정합니다."""
     state = get_file_state(filepath)
-    state['size'] = current_size
+    state['last_byte_offset'] = current_byte_offset
+    state['size'] = current_byte_offset
     state['last_attempt_time'] = current_time
     state['retry_scheduled'] = False
     if 'timestamp' in state:
@@ -195,8 +202,8 @@ def save_line_cache(log_func):
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
 
 # --- 파일 읽기 헬퍼 함수 ---
-def read_file_with_multiple_encodings(filepath, start_offset, log_func):
-    """ 파일을 여러 인코딩으로 읽기 시도하여 성공하는 내용을 반환 """
+def read_file_with_multiple_encodings(filepath, start_byte_offset, log_func):
+    """파일을 바이트 오프셋 기준으로 읽고, 여러 인코딩으로 디코딩을 시도합니다."""
     backend_logger = logging.getLogger('backend_processor')
     
     # 기본 인코딩 목록
@@ -210,26 +217,40 @@ def read_file_with_multiple_encodings(filepath, start_offset, log_func):
     else:
         encodings = default_encodings
     
+    try:
+        file_size = os.path.getsize(filepath)
+        if start_byte_offset >= file_size:
+            return ""
+
+        with open(filepath, 'rb') as f:
+            if start_byte_offset > 0:
+                f.seek(start_byte_offset)
+            raw_content = f.read()
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        log_func(f"오류: 파일 '{os.path.basename(filepath)}' 바이트 읽기 실패 - {e}")
+        backend_logger.error(f"파일 바이트 읽기 실패: {filepath} - {e}")
+        return None
+
+    if raw_content == b"":
+        return ""
+
     content = None
     successful_encoding = None
     
     for enc in encodings:
         try:
-            with open(filepath, 'r', encoding=enc) as f:
-                if start_offset > 0:
-                    file_size = os.path.getsize(filepath) # 파일 끝 넘어가지 않도록 확인
-                    if start_offset >= file_size: 
-                        content = ""
-                        successful_encoding = enc
-                        break
-                    f.seek(start_offset)
-                content = f.read()
-            backend_logger.debug(f"파일 읽기 성공 ({enc}): {os.path.basename(filepath)}")
+            content = raw_content.decode(enc)
+            backend_logger.debug(f"파일 디코딩 성공 ({enc}): {os.path.basename(filepath)}")
             successful_encoding = enc
             break # 읽기 성공 시 종료
-        except (UnicodeDecodeError, FileNotFoundError, OSError, Exception) as e:
+        except UnicodeDecodeError as e:
             backend_logger.debug(f"인코딩 {enc} 실패: {e}")
             continue # 실패 시 다음 인코딩 시도
+        except Exception as e:
+            backend_logger.debug(f"인코딩 {enc} 처리 중 예외: {e}")
+            continue
     
     # 성공한 인코딩 저장
     if successful_encoding:
@@ -334,13 +355,13 @@ def process_file(filepath, config, services, log_func):
 
     try:
         # --- 1. 새로운 내용 식별 ---
-        current_size = os.path.getsize(filepath)
-        last_size = processed_file_states.get(filepath, {}).get('size', 0)
+        current_byte_size = os.path.getsize(filepath)
+        last_byte_offset = get_last_successful_offset(filepath)
         new_raw_content = None
 
-        if current_size > last_size:
-            new_raw_content = read_file_with_multiple_encodings(filepath, last_size, log_func)
-        elif current_size < last_size:
+        if current_byte_size > last_byte_offset:
+            new_raw_content = read_file_with_multiple_encodings(filepath, last_byte_offset, log_func)
+        elif current_byte_size < last_byte_offset:
             log_func(f"  - 파일 크기 감소 감지. 전체 내용 다시 읽기...")
             # 파일이 다시 작성되었을 가능성이 있으므로 인코딩 정보 초기화
             if filepath in file_encodings:
@@ -353,13 +374,13 @@ def process_file(filepath, config, services, log_func):
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time)
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
         if not new_lines:
             backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time)
             return
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
@@ -368,7 +389,7 @@ def process_file(filepath, config, services, log_func):
 
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time)
             return
 
         filtered_content = "\n".join(truly_new_lines) # Docs에 추가할 실제 내용
@@ -412,7 +433,7 @@ def process_file(filepath, config, services, log_func):
             added_lines_cache.add(line)
 
         # --- 5. 최종 상태 업데이트 ---
-        mark_file_processed(filepath, current_size, current_time)
+        mark_file_processed(filepath, current_byte_size, current_time)
         log_func(f"처리 완료: {os.path.basename(filepath)}")
         backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
 
