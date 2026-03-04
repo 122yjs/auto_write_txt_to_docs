@@ -8,7 +8,7 @@ class AppDialogsTests(unittest.TestCase):
         help_text = app_dialogs.build_help_guide_text()
 
         self.assertIn("새 문서 만들기", help_text)
-        self.assertIn("기존 주소 입력", help_text)
+        self.assertIn("기존 문서 주소 입력", help_text)
         self.assertIn("문서 목록", help_text)
         self.assertIn("Docs 웹에서 열기", help_text)
 

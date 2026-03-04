@@ -85,6 +85,12 @@ except ImportError:
     show_backup_restore_dialog = None
 
 try:
+    from src.auto_write_txt_to_docs.main_window_ui import build_main_window_ui
+except ImportError:
+    logging.error("메인 창 UI 모듈(main_window_ui.py)을 찾을 수 없습니다.")
+    build_main_window_ui = None
+
+try:
     from src.auto_write_txt_to_docs.app_dialogs import (
         show_credentials_wizard_dialog,
         show_enhanced_error_dialog as show_enhanced_error_dialog_window,
@@ -141,6 +147,8 @@ class MessengerDocsApp:
         # --- 변수 선언 ---
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
+        self.docs_target_locked = tk.BooleanVar(value=False)
+        self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
 
         # 파일 필터링 관련 변수
@@ -361,6 +369,98 @@ class MessengerDocsApp:
             self.docs_info_var.set(f"문서: {docs_id_display}")
         else:
             self.docs_info_var.set("문서: 설정되지 않음")
+
+        self.refresh_docs_target_ui()
+
+    def refresh_docs_target_ui(self):
+        """문서 대상 고정 상태에 따라 입력/선택 UI를 갱신한다."""
+        docs_input_val = self.docs_input.get().strip()
+        locked = bool(self.docs_target_locked.get() and docs_input_val)
+
+        if self.docs_target_locked.get() != locked:
+            self.docs_target_locked.set(locked)
+
+        if locked:
+            status_text = "대상 문서가 고정되었습니다. 감시 시작 시 이 문서로 기록합니다."
+            status_color = ("#0F9D58", "#81C995")
+            lock_button_text = "문서 경로 변경"
+            lock_button_color = ("gray85", "gray28")
+            lock_button_hover = ("gray78", "gray34")
+            lock_button_text_color = ("gray20", "gray92")
+        elif docs_input_val:
+            status_text = "문서 입력 중입니다. '문서 경로 확정' 버튼을 눌러 고정하세요."
+            status_color = ("#1A73E8", "#8AB4F8")
+            lock_button_text = "문서 경로 확정"
+            lock_button_color = "#1A73E8"
+            lock_button_hover = "#1765CC"
+            lock_button_text_color = None
+        else:
+            status_text = "문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다."
+            status_color = ("gray40", "gray70")
+            lock_button_text = "문서 경로 확정"
+            lock_button_color = "#1A73E8"
+            lock_button_hover = "#1765CC"
+            lock_button_text_color = None
+
+        self.docs_target_status_var.set(status_text)
+
+        if hasattr(self, "docs_target_status_label"):
+            self.docs_target_status_label.configure(text_color=status_color)
+
+        if hasattr(self, "docs_lock_button"):
+            configure_kwargs = {
+                "text": lock_button_text,
+                "fg_color": lock_button_color,
+                "hover_color": lock_button_hover,
+            }
+            if lock_button_text_color is not None:
+                configure_kwargs["text_color"] = lock_button_text_color
+            else:
+                configure_kwargs["text_color"] = ("white", "white")
+            self.docs_lock_button.configure(**configure_kwargs)
+
+        entry_state = "disabled" if locked else "normal"
+        if hasattr(self, "docs_input_entry"):
+            self.docs_input_entry.configure(state=entry_state)
+
+        selection_state = "disabled" if locked else "normal"
+        for widget_name in ("create_doc_button", "manual_doc_input_button", "select_doc_button"):
+            if hasattr(self, widget_name):
+                getattr(self, widget_name).configure(state=selection_state)
+
+    def lock_docs_target(self, source_label="직접 입력"):
+        """현재 입력된 문서를 대상 문서로 고정한다."""
+        docs_input_val = self.docs_input.get().strip()
+        if not docs_input_val:
+            messagebox.showwarning("문서 경로 미지정", "먼저 문서 주소 또는 문서 ID를 입력해주세요.", parent=self.root)
+            return False
+
+        self.docs_target_locked.set(True)
+        self.refresh_docs_target_ui()
+        self.log(f"대상 문서 경로 고정됨: {source_label}")
+        return True
+
+    def unlock_docs_target(self, focus_entry=False):
+        """대상 문서 고정을 해제하고 수정 모드로 전환한다."""
+        was_locked = self.docs_target_locked.get()
+        self.docs_target_locked.set(False)
+        self.refresh_docs_target_ui()
+        if was_locked:
+            self.log("대상 문서 경로 고정 해제됨. 문서 변경 가능.")
+        else:
+            self.log("문서 직접 입력 모드로 전환됨.")
+
+        if focus_entry and hasattr(self, "docs_input_entry"):
+            self.docs_input_entry.focus_set()
+            self.docs_input_entry.icursor(ctk.END)
+
+    def toggle_docs_target_lock(self):
+        """대상 문서 경로의 고정/수정 상태를 전환한다."""
+        if self.docs_target_locked.get():
+            self.unlock_docs_target(focus_entry=True)
+            return
+
+        self.lock_docs_target(source_label="직접 입력")
     
     def validate_inputs(self):
         """입력값 유효성 검사"""
@@ -386,6 +486,8 @@ class MessengerDocsApp:
             docs_id = extract_google_id_from_url(docs_input_val)
             if not docs_id:
                 errors.append("유효한 Google Docs URL 또는 ID를 입력해주세요.")
+            elif not self.docs_target_locked.get():
+                errors.append("대상 문서를 확정하려면 '문서 경로 확정' 버튼을 눌러주세요.")
         
         return errors
     
@@ -452,9 +554,7 @@ class MessengerDocsApp:
 
     def focus_existing_docs_input(self):
         """기존 Google Docs URL/ID를 직접 입력할 수 있도록 입력칸에 포커스를 준다."""
-        if hasattr(self, "docs_input_entry"):
-            self.docs_input_entry.focus_set()
-            self.docs_input_entry.icursor(ctk.END)
+        self.unlock_docs_target(focus_entry=True)
         self.log("기존 Google Docs 주소/ID 직접 입력 모드.")
 
     def get_google_services_for_ui(self):
@@ -509,6 +609,7 @@ class MessengerDocsApp:
         document_id = created_document.get("id", "")
         document_name = created_document.get("name", "새 Google Docs 문서")
         self.docs_input.set(document_id)
+        self.lock_docs_target(source_label=f"새 문서 생성: {document_name}")
         self.log(f"새 문서를 현재 대상 문서로 설정했습니다: {document_name} ({document_id})")
 
         open_created_document = messagebox.askyesno(
@@ -576,6 +677,7 @@ class MessengerDocsApp:
             document_id = document_info.get("id", "")
             document_name = document_info.get("name", "이름 없는 문서")
             self.docs_input.set(document_id)
+            self.lock_docs_target(source_label=f"문서 목록 선택: {document_name}")
             self.log(f"문서 목록에서 선택 완료: {document_name} ({document_id})")
             selector_window.destroy()
 
@@ -644,198 +746,47 @@ class MessengerDocsApp:
         self.root.update_idletasks()
 
     def create_widgets(self):
-        main_frame = ctk.CTkFrame(self.root); main_frame.pack(padx=10, pady=10, fill="both", expand=True)
-        
-        # 상태 표시 프레임
-        status_frame = ctk.CTkFrame(main_frame); status_frame.pack(pady=(0,10), padx=10, fill="x")
-        
-        # 상태 표시 (왼쪽)
-        status_left_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        status_left_frame.pack(side="left", fill="y", padx=10, pady=5)
-        ctk.CTkLabel(status_left_frame, text="상태:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0,5))
-        self.status_label = ctk.CTkLabel(status_left_frame, textvariable=self.status_var, font=ctk.CTkFont(weight="bold"))
-        self.status_label.pack(side="left", padx=5)
-        
-        # 메모리 사용량 표시 (중앙)
-        memory_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        memory_frame.pack(side="left", fill="y", padx=10, pady=5)
-        self.memory_label = ctk.CTkLabel(memory_frame, textvariable=self.memory_usage, font=ctk.CTkFont(size=12))
-        self.memory_label.pack(side="left", padx=5)
-        
-        # 메모리 최적화 버튼
-        self.memory_optimize_button = ctk.CTkButton(
-            memory_frame,
-            text="최적화",
-            width=60,
-            height=20,
-            command=self.optimize_memory,
-            font=ctk.CTkFont(size=11)
+        if not build_main_window_ui:
+            messagebox.showerror("UI 오류", "메인 창 UI 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        widget_refs = build_main_window_ui(
+            self.root,
+            state_vars={
+                "status_var": self.status_var,
+                "memory_usage": self.memory_usage,
+                "watch_folder": self.watch_folder,
+                "file_extensions": self.file_extensions,
+                "docs_input": self.docs_input,
+                "docs_target_status_var": self.docs_target_status_var,
+            },
+            callbacks={
+                "optimize_memory": self.optimize_memory,
+                "browse_folder": self.browse_folder,
+                "open_watch_folder": lambda: self.open_folder_in_explorer(self.watch_folder.get()),
+                "show_filter_settings": self.show_filter_settings,
+                "create_new_google_doc": self.create_new_google_doc,
+                "focus_existing_docs_input": self.focus_existing_docs_input,
+                "select_google_doc": self.select_google_doc,
+                "toggle_docs_target_lock": self.toggle_docs_target_lock,
+                "start_monitoring": self.start_monitoring,
+                "stop_monitoring": self.stop_monitoring,
+                "open_docs_in_browser": self.open_docs_in_browser,
+                "show_theme_settings": self.show_theme_settings,
+                "show_backup_restore_dialog": self.show_backup_restore_dialog,
+                "save_config": self.save_config,
+                "open_log_folder": lambda: self.open_folder_in_explorer(LOG_DIR_STR),
+                "show_log_search_dialog": self.show_log_search_dialog,
+                "clear_log": self.clear_log,
+            },
+            ctk_module=ctk,
+            font_family="Malgun Gothic",
         )
-        self.memory_optimize_button.pack(side="left", padx=(5,0))
-        
-        # 현재 감시 정보 표시 (오른쪽)
-        status_right_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
-        status_right_frame.pack(side="right", fill="y", padx=10, pady=5)
-        
-        # 감시 폴더 표시
-        self.folder_info_var = ctk.StringVar(value="폴더: 설정되지 않음")
-        self.folder_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.folder_info_var, 
-                                             font=ctk.CTkFont(size=12))
-        self.folder_info_label.pack(side="top", anchor="e")
-        
-        # Docs 문서 표시
-        self.docs_info_var = ctk.StringVar(value="문서: 설정되지 않음")
-        self.docs_info_label = ctk.CTkLabel(status_right_frame, textvariable=self.docs_info_var, 
-                                           font=ctk.CTkFont(size=12))
-        self.docs_info_label.pack(side="top", anchor="e")
-        
-        # ⚠️ 수정: settings_frame을 인스턴스 변수로 저장 → disable/enable_settings_widgets에서 안전하게 참조
-        self.settings_frame = ctk.CTkFrame(main_frame)
-        self.settings_frame.pack(pady=10, padx=10, fill="x")
-        self.settings_frame.configure(border_width=1)
-        settings_frame = self.settings_frame  # 로컬 변수로도 유지 (아래 코드 호환)
-        ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
 
-        # 인증 파일 안내 라벨 추가
-        auth_file_info_label = ctk.CTkLabel(
-            settings_frame,
-            text="Google API 인증을 위해 'developer_credentials.json' 파일이 필요합니다.\n"
-                 "자세한 내용은 README.md 파일을 참고하세요.",
-            font=ctk.CTkFont(size=10),
-            justify="left",
-            text_color="gray" # 흐린 색상으로 표시
-        )
-        auth_file_info_label.pack(pady=(0,10), padx=10, anchor="w")
-        
-        # 감시 폴더 설정
-        folder_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); folder_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(folder_frame, text="감시 폴더:", width=120).pack(side="left", padx=(0,5))
-        ctk.CTkEntry(folder_frame, textvariable=self.watch_folder).pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkButton(folder_frame, text="폴더 선택...", width=80, command=self.browse_folder).pack(side="left", padx=(5,0))
-        ctk.CTkButton(folder_frame, text="열기", width=50, command=lambda: self.open_folder_in_explorer(self.watch_folder.get())).pack(side="left", padx=(5,0))
-        
-        # 파일 필터 설정
-        filter_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); filter_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(filter_frame, text="파일 필터:", width=120).pack(side="left", padx=(0,5))
-        
-        # 파일 확장자 입력
-        ext_entry = ctk.CTkEntry(filter_frame, textvariable=self.file_extensions, width=120)
-        ext_entry.pack(side="left", padx=5)
-        ctk.CTkLabel(filter_frame, text="(쉼표로 구분, 예: .txt,.log)").pack(side="left", padx=(0,5))
-        
-        # 필터 설정 버튼
-        ctk.CTkButton(filter_frame, text="고급 필터...", width=80, command=self.show_filter_settings).pack(side="right", padx=(5,0))
-        
-        # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
-        
-        # Google Docs 대상 문서 설정
-        docs_action_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_action_frame.pack(fill="x", padx=10, pady=(5,5))
-        ctk.CTkLabel(docs_action_frame, text="문서 지정:", width=120).pack(side="left", padx=(0,5))
+        for widget_name, widget_value in widget_refs.items():
+            setattr(self, widget_name, widget_value)
 
-        ctk.CTkButton(
-            docs_action_frame,
-            text="새 문서 만들기",
-            width=110,
-            command=self.create_new_google_doc,
-            fg_color="#0F9D58",
-            hover_color="#0B8043"
-        ).pack(side="left", padx=(5,0))
-
-        ctk.CTkButton(
-            docs_action_frame,
-            text="기존 주소 입력",
-            width=110,
-            command=self.focus_existing_docs_input
-        ).pack(side="left", padx=(5,0))
-
-        docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(0,10))
-        ctk.CTkLabel(docs_frame, text="기존 주소/ID:", width=120).pack(side="left", padx=(0,5))
-        self.docs_input_entry = ctk.CTkEntry(docs_frame, textvariable=self.docs_input)
-        self.docs_input_entry.pack(side="left", fill="x", expand=True, padx=5)
-
-        ctk.CTkButton(
-            docs_frame,
-            text="문서 목록",
-            width=90,
-            command=self.select_google_doc
-        ).pack(side="left", padx=(5,0))
-        
-        # 제어 버튼 프레임
-        control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
-        self.start_button = ctk.CTkButton(control_frame, text="감시 시작", command=self.start_monitoring, width=120); self.start_button.pack(side="left", padx=10)
-        self.stop_button = ctk.CTkButton(control_frame, text="감시 중지", command=self.stop_monitoring, width=120, state="disabled"); self.stop_button.pack(side="left", padx=10)
-        
-        # 웹에서 열기 버튼 (제어 프레임에도 추가)
-        self.open_docs_button = ctk.CTkButton(
-            control_frame, 
-            text="Docs 웹에서 열기", 
-            command=self.open_docs_in_browser, 
-            width=120,
-            fg_color="#4285F4",  # Google 파란색
-            hover_color="#3367D6"  # 어두운 파란색
-        )
-        self.open_docs_button.pack(side="left", padx=10)
-        
-        ctk.CTkFrame(control_frame, fg_color="transparent").pack(side="left", fill="x", expand=True)
-        
-        # 테마 버튼
-        theme_button = ctk.CTkButton(
-            control_frame,
-            text="테마 설정",
-            command=self.show_theme_settings,
-            width=100
-        )
-        theme_button.pack(side="right", padx=10)
-        
-        # 백업/복원 버튼
-        backup_button = ctk.CTkButton(
-            control_frame,
-            text="백업/복원",
-            command=self.show_backup_restore_dialog,
-            width=100
-        )
-        backup_button.pack(side="right", padx=10)
-        
-        # 설정 저장 버튼
-        ctk.CTkButton(control_frame, text="설정 저장", command=self.save_config, width=120).pack(side="right", padx=10)
-        
-        # 로그 프레임
-        log_frame = ctk.CTkFrame(main_frame); log_frame.pack(pady=10, padx=10, fill="both", expand=True); log_frame.configure(border_width=1)
-
-        log_header_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_header_frame.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(log_header_frame, text="로그", font=ctk.CTkFont(weight="bold")).pack(side="left")
-
-        # 로그 폴더 열기 버튼 추가
-        self.log_folder_button = ctk.CTkButton(
-            log_header_frame,
-            text="로그 폴더 열기",
-            width=100,
-            command=lambda: self.open_folder_in_explorer(LOG_DIR_STR)
-        )
-        self.log_folder_button.pack(side="right", padx=(5,0)) # 오른쪽 정렬
-        
-        # 로그 검색 버튼 추가
-        self.log_search_button = ctk.CTkButton(
-            log_header_frame,
-            text="로그 검색",
-            width=80,
-            command=self.show_log_search_dialog
-        )
-        self.log_search_button.pack(side="right", padx=5) # 오른쪽 정렬
-        
-        # 로그 지우기 버튼 추가
-        self.log_clear_button = ctk.CTkButton(
-            log_header_frame,
-            text="로그 지우기",
-            width=80,
-            command=self.clear_log
-        )
-        self.log_clear_button.pack(side="right", padx=5) # 오른쪽 정렬
-
-        self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
-
-        # ⚠️ 수정: "경로 저장" 버튼 제거 — "설정 저장" 버튼(control_frame)과 완전히 동일한 기능으로 중복이었음
+        self.refresh_docs_target_ui()
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
     def setup_tray_icon(self):
@@ -1075,6 +1026,7 @@ class MessengerDocsApp:
         normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
+        self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
         self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
         self.file_extensions.set(normalized_config.get("file_extensions", ".txt"))
         self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
@@ -1083,6 +1035,7 @@ class MessengerDocsApp:
         appearance_mode = normalized_config.get("appearance_mode", "System")
         self.appearance_mode.set(appearance_mode)
         ctk.set_appearance_mode(appearance_mode)
+        self.refresh_docs_target_ui()
         return normalized_config
 
     def load_config(self):
@@ -1221,6 +1174,7 @@ class MessengerDocsApp:
                     for widget in child.winfo_children():
                         if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
                             widget.configure(state="normal")
+            self.refresh_docs_target_ui()
         except AttributeError:
             pass
 
