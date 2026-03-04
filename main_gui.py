@@ -60,6 +60,13 @@ except ImportError:
     save_app_config = None
     save_backup_config = None
 
+try:
+    from src.auto_write_txt_to_docs.ui_helpers import center_window, show_backup_restore_dialog
+except ImportError:
+    messagebox.showerror("모듈 오류", "UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
+    center_window = None
+    show_backup_restore_dialog = None
+
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
     """ Google Docs URL에서 ID 추출 """
@@ -1640,12 +1647,15 @@ class MessengerDocsApp:
         cancel_button.pack(side="right", padx=5)
         
         # 창 중앙 배치
-        theme_window.update_idletasks()
-        width = theme_window.winfo_width()
-        height = theme_window.winfo_height()
-        x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (theme_window.winfo_screenheight() // 2) - (height // 2)
-        theme_window.geometry(f"{width}x{height}+{x}+{y}")
+        if center_window:
+            center_window(theme_window)
+        else:
+            theme_window.update_idletasks()
+            width = theme_window.winfo_width()
+            height = theme_window.winfo_height()
+            x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (theme_window.winfo_screenheight() // 2) - (height // 2)
+            theme_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def backup_settings(self):
         """현재 설정을 백업 파일로 저장"""
@@ -1727,95 +1737,16 @@ class MessengerDocsApp:
     
     def show_backup_restore_dialog(self):
         """백업 및 복원 대화 상자"""
-        backup_window = ctk.CTkToplevel(self.root)
-        backup_window.title("설정 백업 및 복원")
-        backup_window.geometry("550x400")
-        backup_window.minsize(550, 400)
-        backup_window.transient(self.root)  # 부모 창 위에 표시
-        backup_window.grab_set()  # 모달 창으로 설정
-        
-        # 메인 프레임
-        main_frame = ctk.CTkFrame(backup_window)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # 제목
-        title_label = ctk.CTkLabel(
-            main_frame, 
-            text="설정 백업 및 복원", 
-            font=ctk.CTkFont(size=16, weight="bold")
+        if not show_backup_restore_dialog:
+            messagebox.showerror("UI 오류", "백업/복원 대화상자 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        show_backup_restore_dialog(
+            self.root,
+            on_backup=self.backup_settings,
+            on_restore=self.restore_settings,
+            ctk_module=ctk,
         )
-        title_label.pack(pady=(0, 15))
-        
-        # 설명
-        description = ctk.CTkLabel(
-            main_frame,
-            text="현재 설정을 백업하거나 이전에 백업한 설정을 복원할 수 있습니다.",
-            wraplength=350
-        )
-        description.pack(pady=(0, 20))
-        
-        # 백업 섹션
-        backup_frame = ctk.CTkFrame(main_frame)
-        backup_frame.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            backup_frame,
-            text="설정 백업",
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", pady=(5, 10), padx=10)
-        
-        ctk.CTkLabel(
-            backup_frame,
-            text="현재 설정을 파일로 저장합니다.",
-            wraplength=350
-        ).pack(anchor="w", padx=10)
-        
-        ctk.CTkButton(
-            backup_frame,
-            text="설정 백업",
-            command=lambda: [backup_window.destroy(), self.backup_settings()],
-            width=120
-        ).pack(anchor="w", pady=10, padx=10)
-        
-        # 복원 섹션
-        restore_frame = ctk.CTkFrame(main_frame)
-        restore_frame.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            restore_frame,
-            text="설정 복원",
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", pady=(5, 10), padx=10)
-        
-        ctk.CTkLabel(
-            restore_frame,
-            text="백업 파일에서 설정을 불러옵니다.",
-            wraplength=350
-        ).pack(anchor="w", padx=10)
-        
-        ctk.CTkButton(
-            restore_frame,
-            text="설정 복원",
-            command=lambda: [backup_window.destroy(), self.restore_settings()],
-            width=120
-        ).pack(anchor="w", pady=10, padx=10)
-        
-        # 닫기 버튼
-        close_button = ctk.CTkButton(
-            main_frame,
-            text="닫기",
-            command=backup_window.destroy,
-            width=100
-        )
-        close_button.pack(side="right", pady=(10, 0))
-        
-        # 창 중앙 배치
-        backup_window.update_idletasks()
-        width = backup_window.winfo_width()
-        height = backup_window.winfo_height()
-        x = (backup_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (backup_window.winfo_screenheight() // 2) - (height // 2)
-        backup_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def check_memory_usage(self):
         """현재 프로세스의 메모리 사용량을 확인하고 표시"""
