@@ -13,16 +13,28 @@ from googleapiclient.errors import HttpError
 try:
     # BUNDLED_CREDENTIALS_FILE_STR: 프로그램 신분증 주소
     # TOKEN_FILE_STR: 사용자 출입 허가증 저장 주소
-    from src.auto_write_txt_to_docs.path_utils import BUNDLED_CREDENTIALS_FILE_STR, TOKEN_FILE_STR
+    from src.auto_write_txt_to_docs.path_utils import (
+        BUNDLED_CREDENTIALS_FILE_STR,
+        TOKEN_FILE_STR,
+        USER_CREDENTIALS_FILE_STR,
+        get_effective_credentials_path,
+    )
 except ImportError:
     try:
         # 상대 import 시도 (패키지 내에서 실행될 때)
-        from .path_utils import BUNDLED_CREDENTIALS_FILE_STR, TOKEN_FILE_STR
+        from .path_utils import (
+            BUNDLED_CREDENTIALS_FILE_STR,
+            TOKEN_FILE_STR,
+            USER_CREDENTIALS_FILE_STR,
+            get_effective_credentials_path,
+        )
     except ImportError:
         # path_utils 파일이 없는 비상 상황 대비
         print("오류: path_utils.py 파일을 찾을 수 없습니다. Google 인증이 작동하지 않습니다.")
         BUNDLED_CREDENTIALS_FILE_STR = None
+        USER_CREDENTIALS_FILE_STR = None
         TOKEN_FILE_STR = 'token.json'  # 임시 경로
+        get_effective_credentials_path = None
 
 # 프로그램이 구글 문서에 접근할 수 있도록 '권한 범위(Scope)' 설정
 SCOPES = [
@@ -51,7 +63,10 @@ def authenticate(log_func):
     creds = None  # 출입 허가증을 담을 변수 초기화
 
     # ⭐ 1. 프로그램 신분증 파일 주소 가져오기 (path_utils에서) ⭐
-    credentials_path = BUNDLED_CREDENTIALS_FILE_STR
+    if get_effective_credentials_path:
+        credentials_path = str(get_effective_credentials_path())
+    else:
+        credentials_path = BUNDLED_CREDENTIALS_FILE_STR
     # ⭐ 2. 사용자 출입 허가증 저장 파일 주소 가져오기 (path_utils에서) ⭐
     token_path = TOKEN_FILE_STR
 
@@ -64,12 +79,16 @@ def authenticate(log_func):
 
     # 신분증 파일 존재 여부 확인
     if not os.path.exists(credentials_path):
-        error_msg = f"오류: Google 인증 파일({os.path.basename(credentials_path)})을 찾을 수 없습니다. 프로그램을 다시 설치하거나, 'assets' 폴더에 인증 파일이 있는지 확인해 주세요."
+        error_msg = (
+            f"오류: Google 인증 파일({os.path.basename(credentials_path)})을 찾을 수 없습니다. "
+            f"사용자 설정 경로({USER_CREDENTIALS_FILE_STR}) 또는 기본 번들 경로({BUNDLED_CREDENTIALS_FILE_STR})를 확인해 주세요."
+        )
         log_func(error_msg)
         auth_logger.critical(f"Credentials file missing at: {credentials_path}")
         return None
 
-    auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path}")
+    credential_source = "사용자 지정 인증 파일" if USER_CREDENTIALS_FILE_STR and credentials_path == USER_CREDENTIALS_FILE_STR else "번들 인증 파일"
+    auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path} ({credential_source})")
     log_func(f"백엔드: Google 인증 확인 중... (토큰 저장소: {token_path})")
 
     # ⭐ 3. 기존 출입 허가증(token.json)이 있는지 확인하고 불러오기 ⭐

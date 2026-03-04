@@ -34,15 +34,19 @@ try:
     from src.auto_write_txt_to_docs.path_utils import (
         BUNDLED_CREDENTIALS_FILE_STR,
         CONFIG_FILE_STR,
+        USER_CREDENTIALS_FILE_STR,
         LEGACY_CONFIG_FILE_STR,
         LOG_DIR_STR,
+        get_effective_credentials_path,
     )
 except ImportError:
     messagebox.showerror("모듈 오류", "경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
     BUNDLED_CREDENTIALS_FILE_STR = None
     CONFIG_FILE_STR = "config.json"
+    USER_CREDENTIALS_FILE_STR = "developer_credentials.json"
     LEGACY_CONFIG_FILE_STR = "config.json"
     LOG_DIR_STR = "logs"
+    get_effective_credentials_path = None
 
 try:
     from src.auto_write_txt_to_docs.config_manager import (
@@ -168,8 +172,8 @@ class MessengerDocsApp:
 
     def check_credentials_file(self):
         """ Google API 인증 파일 (developer_credentials.json) 존재 여부 확인 및 안내 """
-        if not BUNDLED_CREDENTIALS_FILE_STR:
-            self.log("오류: BUNDLED_CREDENTIALS_FILE_STR이 설정되지 않았습니다. path_utils.py를 확인하세요.")
+        if not BUNDLED_CREDENTIALS_FILE_STR and not USER_CREDENTIALS_FILE_STR:
+            self.log("오류: 인증 파일 경로 상수가 설정되지 않았습니다. path_utils.py를 확인하세요.")
             messagebox.showwarning(
                 "설정 오류",
                 "프로그램 내부 설정(인증 파일 경로)에 문제가 있습니다.\n개발자에게 문의하세요.",
@@ -177,24 +181,21 @@ class MessengerDocsApp:
             )
             return
 
-        # 실제 파일 존재 여부 확인
-        # BUNDLED_CREDENTIALS_FILE_STR은 절대 경로일 수도, 상대 경로일 수도 있습니다.
-        # path_utils.py의 get_bundled_credentials_path() 로직에 따라 결정됩니다.
-        # 여기서는 해당 경로 문자열을 그대로 사용합니다.
-        credentials_path = BUNDLED_CREDENTIALS_FILE_STR
+        credentials_path = str(get_effective_credentials_path()) if get_effective_credentials_path else BUNDLED_CREDENTIALS_FILE_STR
+        credential_source = "사용자 설정 폴더" if USER_CREDENTIALS_FILE_STR and credentials_path == USER_CREDENTIALS_FILE_STR else "기본 번들 경로"
 
-        # path_utils.py에서 get_bundled_credentials_path 함수가 print 하므로, 여기서도 로그를 남깁니다.
-        self.log(f"확인 중인 인증 파일 경로: {credentials_path}")
+        self.log(f"확인 중인 인증 파일 경로: {credentials_path} ({credential_source})")
 
         if not os.path.exists(credentials_path):
             self.log(f"경고: 인증 파일({credentials_path})을 찾을 수 없습니다.")
             open_wizard = messagebox.askyesno(
                 "인증 파일 누락",
-                f"Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
-                f"예상 경로: {credentials_path}\n\n"
+                "Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
+                f"사용자 설정 경로: {USER_CREDENTIALS_FILE_STR}\n"
+                f"기본 번들 경로: {BUNDLED_CREDENTIALS_FILE_STR}\n\n"
                 "프로그램 사용을 위해서는 이 파일이 필요합니다.\n"
                 "README.md 파일의 '설정' 섹션을 참고하거나,\n"
-                "바로 이어서 'Google 인증 설정 마법사'를 통해 준비할 수 있습니다.\n\n"
+                "바로 이어서 'Google 인증 설정 마법사'를 통해 사용자 설정 폴더에 복사할 수 있습니다.\n\n"
                 "설정 마법사를 지금 열어 파일을 준비하시겠습니까?",
                 parent=self.root
             )
@@ -1832,7 +1833,7 @@ class MessengerDocsApp:
                 "1) 'Google Cloud Console 열기'를 눌러 API를 활성화하고\n"
                 "   OAuth 데스크톱 애플리케이션 자격 증명(JSON)을 다운로드하세요.\n\n"
                 "2) 'JSON 파일 선택'을 눌러 다운로드한 파일을 선택하면\n"
-                "   프로그램이 자동으로 developer_credentials.json 으로 복사합니다.\n\n"
+                "   프로그램이 사용자 설정 폴더의 developer_credentials.json 으로 복사합니다.\n\n"
                 "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
                 "   프로그램을 다시 실행하거나 감시를 시작하세요."
             ),
@@ -1854,20 +1855,23 @@ class MessengerDocsApp:
         console_btn.pack(fill="x", pady=5)
 
         # 결과 라벨 (상태 표시)
-        result_label = ctk.CTkLabel(frame, text="JSON 파일을 아직 선택하지 않았습니다.")
+        result_label = ctk.CTkLabel(
+            frame,
+            text=f"JSON 파일을 아직 선택하지 않았습니다.\n복사 대상: {USER_CREDENTIALS_FILE_STR}"
+        )
         result_label.pack(fill="x", pady=(10, 5))
 
-        # BUNDLED_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
-        if not BUNDLED_CREDENTIALS_FILE_STR:
+        # USER_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
+        if not USER_CREDENTIALS_FILE_STR:
             messagebox.showerror(
                 "경로 오류",
-                "인증 파일 기본 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
+                "인증 파일 저장 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
                 parent=wizard
             )
             wizard.destroy()
             return
 
-        credentials_target = Path(str(BUNDLED_CREDENTIALS_FILE_STR))
+        credentials_target = Path(str(USER_CREDENTIALS_FILE_STR))
 
         # JSON 선택 → 복사
         def select_and_copy_json():
