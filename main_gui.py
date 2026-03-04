@@ -44,6 +44,22 @@ except ImportError:
     LEGACY_CONFIG_FILE_STR = "config.json"
     LOG_DIR_STR = "logs"
 
+try:
+    from src.auto_write_txt_to_docs.config_manager import (
+        load_app_config,
+        load_backup_config,
+        normalize_config_data,
+        save_app_config,
+        save_backup_config,
+    )
+except ImportError:
+    messagebox.showerror("모듈 오류", "설정 관리 모듈(config_manager.py)을 찾을 수 없습니다.")
+    load_app_config = None
+    load_backup_config = None
+    normalize_config_data = None
+    save_app_config = None
+    save_backup_config = None
+
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
     """ Google Docs URL에서 ID 추출 """
@@ -791,7 +807,20 @@ class MessengerDocsApp:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_log_queue)
     def save_config(self):
-        config_data = { 
+        if not save_app_config:
+            messagebox.showerror("저장 오류", "설정 저장 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        config_data = self.get_current_config_data()
+        try:
+            save_app_config(config_data, config_path=CONFIG_FILE_STR)
+            self.log("설정 저장 완료.")
+            self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
+        except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
+
+    def get_current_config_data(self):
+        """현재 UI 상태를 설정 딕셔너리로 변환한다."""
+        return {
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
@@ -802,41 +831,46 @@ class MessengerDocsApp:
             # 테마 설정 추가
             "appearance_mode": self.appearance_mode.get()
         }
-        try:
-            with open(CONFIG_FILE_STR, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
-            self.log("설정 저장 완료.")
-            self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
-        except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
-    def load_config(self):
-        config_path = CONFIG_FILE_STR
-        if not os.path.exists(config_path) and LEGACY_CONFIG_FILE_STR != CONFIG_FILE_STR and os.path.exists(LEGACY_CONFIG_FILE_STR):
-            config_path = LEGACY_CONFIG_FILE_STR
-            self.log(f"레거시 설정 파일을 불러옵니다: {config_path}")
 
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f: config_data = json.load(f)
-                self.watch_folder.set(config_data.get("watch_folder", ""))
-                self.docs_input.set(config_data.get("docs_input", ""))
-                self.show_help_on_startup.set(config_data.get("show_help_on_startup", True))
-                
-                # 파일 필터링 설정 로드
-                self.file_extensions.set(config_data.get("file_extensions", ".txt"))
-                self.use_regex_filter.set(config_data.get("use_regex_filter", False))
-                self.regex_pattern.set(config_data.get("regex_pattern", ""))
-                
-                # 테마 설정 로드 및 적용
-                appearance_mode = config_data.get("appearance_mode", "System")
-                self.appearance_mode.set(appearance_mode)
-                ctk.set_appearance_mode(appearance_mode)
-                self.log(f"테마 설정 로드: {appearance_mode} 모드")
-                
-                self.log("저장된 설정 로드 완료.")
-                
-                # 설정 로드 후 상태 표시 업데이트
-                self.on_setting_changed()
-            except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
-        else: self.log("저장된 설정 파일 없음.")
+    def apply_config_data(self, config_data):
+        """설정 딕셔너리를 UI 상태에 반영한다."""
+        normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
+        self.watch_folder.set(normalized_config.get("watch_folder", ""))
+        self.docs_input.set(normalized_config.get("docs_input", ""))
+        self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
+        self.file_extensions.set(normalized_config.get("file_extensions", ".txt"))
+        self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
+        self.regex_pattern.set(normalized_config.get("regex_pattern", ""))
+
+        appearance_mode = normalized_config.get("appearance_mode", "System")
+        self.appearance_mode.set(appearance_mode)
+        ctk.set_appearance_mode(appearance_mode)
+        return normalized_config
+
+    def load_config(self):
+        if not load_app_config:
+            messagebox.showwarning("로드 오류", "설정 로드 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        try:
+            config_data, config_path, loaded_from_legacy, config_found = load_app_config(
+                config_path=CONFIG_FILE_STR,
+                legacy_config_path=LEGACY_CONFIG_FILE_STR,
+            )
+            if loaded_from_legacy:
+                self.log(f"레거시 설정 파일을 불러옵니다: {config_path}")
+
+            if not config_found:
+                self.log("저장된 설정 파일 없음.")
+                return
+
+            applied_config = self.apply_config_data(config_data)
+            self.log(f"테마 설정 로드: {applied_config.get('appearance_mode', 'System')} 모드")
+            self.log("저장된 설정 로드 완료.")
+
+            # 설정 로드 후 상태 표시 업데이트
+            self.on_setting_changed()
+        except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
     def start_monitoring(self):
         if not run_monitoring: 
             messagebox.showerror("실행 오류", "백엔드 모듈 로드 불가.", parent=self.root)
@@ -1626,24 +1660,13 @@ class MessengerDocsApp:
         if not backup_path:
             return  # 사용자가 취소함
         
+        if not save_backup_config:
+            messagebox.showerror("백업 실패", "설정 백업 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
         try:
-            # 현재 설정 데이터 수집
-            config_data = {
-                "watch_folder": self.watch_folder.get(),
-                "docs_input": self.docs_input.get(),
-                "show_help_on_startup": self.show_help_on_startup.get(),
-                "file_extensions": self.file_extensions.get(),
-                "use_regex_filter": self.use_regex_filter.get(),
-                "regex_pattern": self.regex_pattern.get(),
-                "appearance_mode": self.appearance_mode.get(),
-                # 백업 메타데이터
-                "backup_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "backup_version": "1.0"
-            }
-            
             # 백업 파일 저장
-            with open(backup_path, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            save_backup_config(backup_path, self.get_current_config_data())
             
             self.log(f"설정 백업 완료: {backup_path}")
             messagebox.showinfo("백업 완료", f"설정이 성공적으로 백업되었습니다.\n{backup_path}", parent=self.root)
@@ -1661,11 +1684,14 @@ class MessengerDocsApp:
         
         if not backup_path:
             return  # 사용자가 취소함
+
+        if not load_backup_config:
+            messagebox.showerror("복원 실패", "설정 복원 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
         
         try:
             # 백업 파일 로드
-            with open(backup_path, 'r', encoding='utf-8') as f:
-                backup_data = json.load(f)
+            restored_config, backup_data = load_backup_config(backup_path)
             
             # 백업 버전 확인
             if "backup_version" not in backup_data:
@@ -1684,28 +1710,7 @@ class MessengerDocsApp:
                 return
             
             # 설정 복원
-            if "watch_folder" in backup_data:
-                self.watch_folder.set(backup_data["watch_folder"])
-            
-            if "docs_input" in backup_data:
-                self.docs_input.set(backup_data["docs_input"])
-            
-            if "show_help_on_startup" in backup_data:
-                self.show_help_on_startup.set(backup_data["show_help_on_startup"])
-            
-            if "file_extensions" in backup_data:
-                self.file_extensions.set(backup_data["file_extensions"])
-            
-            if "use_regex_filter" in backup_data:
-                self.use_regex_filter.set(backup_data["use_regex_filter"])
-            
-            if "regex_pattern" in backup_data:
-                self.regex_pattern.set(backup_data["regex_pattern"])
-            
-            if "appearance_mode" in backup_data:
-                appearance_mode = backup_data["appearance_mode"]
-                self.appearance_mode.set(appearance_mode)
-                ctk.set_appearance_mode(appearance_mode)
+            self.apply_config_data(restored_config)
             
             # 설정 변경 플래그 설정 및 상태 업데이트
             self.settings_changed = True
