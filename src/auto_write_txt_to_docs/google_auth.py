@@ -57,16 +57,16 @@ def authenticate(log_func):
 
     # 신분증 파일 경로 유효성 검사
     if not credentials_path:
-        error_msg = "오류: Google API 인증에 필요한 프로그램 신분증 파일(developer_credentials.json)의 경로가 설정되지 않았습니다. path_utils.py 설정을 확인하세요."
-        log_func(error_msg) # GUI 및 파일 로그로 전달
-        auth_logger.critical(error_msg) # 백엔드 심각 오류 로그
+        error_msg = "오류: Google API 인증에 필요한 필수 설정이 누락되었습니다. 프로그램 제작자에게 문의하세요."
+        log_func(error_msg)
+        auth_logger.critical("BUNDLED_CREDENTIALS_FILE_STR is missing in path_utils.py")
         return None
 
     # 신분증 파일 존재 여부 확인
     if not os.path.exists(credentials_path):
-        error_msg = f"오류: Google API 인증에 필요한 프로그램 신분증 파일({credentials_path})을 찾을 수 없습니다. README.md를 참고하여 파일을 올바른 위치에 배치해주세요."
-        log_func(error_msg) # GUI 및 파일 로그로 전달
-        auth_logger.critical(error_msg) # 백엔드 심각 오류 로그
+        error_msg = f"오류: Google 인증 파일({os.path.basename(credentials_path)})을 찾을 수 없습니다. 프로그램을 다시 설치하거나, 'assets' 폴더에 인증 파일이 있는지 확인해 주세요."
+        log_func(error_msg)
+        auth_logger.critical(f"Credentials file missing at: {credentials_path}")
         return None
 
     auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path}")
@@ -106,12 +106,12 @@ def authenticate(log_func):
         if not creds:
             auth_logger.info("새로운 인증 플로우 시작 (사용자 브라우저 확인 필요)")
             try:
-                log_func("백엔드: ⚠️ Google 계정 인증 필요! 웹 브라우저 창을 확인하고 로그인 및 접근을 '허용' 해주세요. ⚠️")
+                log_func("백엔드: ⚠️ Google 계정 인증이 필요합니다! 웹 브라우저가 열리면 로그인 후 '허용' 버튼을 눌러주세요. ⚠️")
                 # ⭐ 프로그램 신분증(credentials_path)을 이용해 사용자 허락 절차(flow) 시작 ⭐
                 flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
                 # 브라우저를 열고, 사용자가 허락할 때까지 기다림 (port=0 은 사용 가능한 아무 포트나 사용)
                 creds = flow.run_local_server(port=0)
-                log_func("백엔드: ✅ Google 계정 사용자 인증 성공!")
+                log_func("백엔드: ✅ Google 계정 인증에 성공했습니다!")
                 auth_logger.info("새로운 사용자 인증 완료")
             except Exception as e:
                 log_func(f"오류: Google 계정 인증 중 오류 발생 - {e}")
