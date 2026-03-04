@@ -1999,7 +1999,12 @@ class MessengerDocsApp:
 
 
 # --- 애플리케이션 실행 ---
-if __name__ == "__main__":
+def main():
+    """GUI 애플리케이션 진입점."""
     root = ctk.CTk()
-    app = MessengerDocsApp(root)
+    MessengerDocsApp(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
