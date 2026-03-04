@@ -10,6 +10,8 @@ import threading
 from googleapiclient.errors import HttpError
 import traceback
 import logging
+import hashlib
+from collections import OrderedDict
 from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유지
 
 # google_auth 모듈 임포트
@@ -20,19 +22,26 @@ except ImportError:
     get_google_services = None
 
 try:
-    from .path_utils import CACHE_FILE_STR, LEGACY_CACHE_FILE_STR, LOG_DIR_STR
+    from .path_utils import (
+        CACHE_FILE_STR,
+        LEGACY_CACHE_FILE_STR,
+        LOG_DIR_STR,
+        PROCESSED_STATE_FILE_STR,
+    )
 except ImportError:
     project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
     LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
     LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
+    PROCESSED_STATE_FILE_STR = os.path.join(project_root_fallback, "processed_state.json")
 
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
-processed_file_states = {} # 파일별 마지막 처리 상태 (성공 size, 최근 시도 시간) - 메모리 기반
+processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트 오프셋, 최근 시도 시간) - 메모리 기반
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 RETRY_DELAY = 5.0
+MAX_GLOBAL_CACHE_SIZE = 10000
 
 # 로깅 설정
 def setup_backend_logging():
@@ -64,8 +73,9 @@ def setup_backend_logging():
     return logger
 
 # 라인 캐시 관련 설정
-added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
+added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
 LINE_CACHE_FILE = CACHE_FILE_STR
+PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
 
 def get_file_state(filepath):
@@ -73,10 +83,63 @@ def get_file_state(filepath):
     return processed_file_states.setdefault(filepath, {})
 
 
+def hash_line_for_dedupe(line):
+    """라인 문자열을 파일별 중복 판정용 해시로 변환합니다."""
+    return hashlib.sha256(line.encode('utf-8')).hexdigest()
+
+
+def get_file_seen_hashes(filepath):
+    """파일별로 이미 처리한 라인 해시 집합을 반환합니다."""
+    state = get_file_state(filepath)
+    seen_hashes = state.get('seen_line_hashes')
+
+    if isinstance(seen_hashes, set):
+        return seen_hashes
+
+    if isinstance(seen_hashes, list):
+        seen_hashes = {str(item) for item in seen_hashes if item}
+    else:
+        seen_hashes = set()
+
+    state['seen_line_hashes'] = seen_hashes
+    return seen_hashes
+
+
+def remember_file_lines(filepath, lines):
+    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다."""
+    if not lines:
+        return
+
+    seen_hashes = get_file_seen_hashes(filepath)
+    for line in lines:
+        seen_hashes.add(hash_line_for_dedupe(line))
+
+
+def remember_global_lines(lines):
+    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다."""
+    if not lines:
+        return
+
+    for line in lines:
+        normalized_line = str(line)
+        if normalized_line in added_lines_cache:
+            added_lines_cache.move_to_end(normalized_line)
+        else:
+            added_lines_cache[normalized_line] = None
+
+    optimize_cache_size(None)
+
+
 def get_last_attempt_time(filepath):
     """최근 처리 시도 시간을 반환합니다. (레거시 timestamp 키도 호환)"""
     state = processed_file_states.get(filepath, {})
     return state.get('last_attempt_time', state.get('timestamp', 0))
+
+
+def get_last_successful_offset(filepath):
+    """마지막으로 안전하게 처리된 바이트 오프셋을 반환합니다."""
+    state = processed_file_states.get(filepath, {})
+    return state.get('last_byte_offset', state.get('size', 0))
 
 
 def mark_processing_attempt(filepath, current_time):
@@ -87,10 +150,11 @@ def mark_processing_attempt(filepath, current_time):
         del state['timestamp']
 
 
-def mark_file_processed(filepath, current_size, current_time):
-    """파일이 안전하게 처리된 후 상태를 확정합니다."""
+def mark_file_processed(filepath, current_byte_offset, current_time):
+    """파일이 안전하게 처리된 후 바이트 오프셋 상태를 확정합니다."""
     state = get_file_state(filepath)
-    state['size'] = current_size
+    state['last_byte_offset'] = current_byte_offset
+    state['size'] = current_byte_offset
     state['last_attempt_time'] = current_time
     state['retry_scheduled'] = False
     if 'timestamp' in state:
@@ -129,6 +193,83 @@ def schedule_retry(filepath, log_func, reason, current_time=None):
     retry_timer.daemon = True
     retry_timer.start()
 
+
+def load_processed_state(log_func):
+    """이전 실행에서 저장된 파일 처리 상태를 로드합니다."""
+    global processed_file_states
+
+    if not os.path.exists(PROCESSED_STATE_FILE):
+        log_func(f"백엔드: 처리 상태 파일({PROCESSED_STATE_FILE}) 없음. 새로 시작합니다.")
+        processed_file_states = {}
+        return
+
+    try:
+        with open(PROCESSED_STATE_FILE, 'r', encoding='utf-8') as f:
+            loaded_state = json.load(f)
+
+        if not isinstance(loaded_state, dict):
+            raise ValueError("처리 상태 파일 최상위 구조가 dict가 아닙니다.")
+
+        sanitized_state = {}
+        for filepath, state in loaded_state.items():
+            if not isinstance(filepath, str) or not isinstance(state, dict):
+                continue
+
+            byte_offset = state.get('last_byte_offset', state.get('size', 0))
+            last_attempt_time = state.get('last_attempt_time', state.get('timestamp', 0))
+
+            try:
+                byte_offset = max(0, int(byte_offset))
+            except (TypeError, ValueError):
+                byte_offset = 0
+
+            try:
+                last_attempt_time = float(last_attempt_time)
+            except (TypeError, ValueError):
+                last_attempt_time = 0
+
+            sanitized_state[filepath] = {
+                'last_byte_offset': byte_offset,
+                'size': byte_offset,
+                'last_attempt_time': last_attempt_time,
+                'seen_line_hashes': {
+                    str(item) for item in state.get('seen_line_hashes', []) if item
+                },
+                'retry_scheduled': False,
+            }
+
+        processed_file_states = sanitized_state
+        log_func(f"백엔드: 처리 상태({PROCESSED_STATE_FILE}) 로드됨 ({len(processed_file_states)}개).")
+    except json.JSONDecodeError:
+        log_func(f"경고: 처리 상태 파일({PROCESSED_STATE_FILE}) 형식이 잘못됨. 빈 상태로 시작합니다.")
+        processed_file_states = {}
+    except Exception as e:
+        log_func(f"경고: 처리 상태 로드 실패 - {e}")
+        processed_file_states = {}
+
+
+def save_processed_state(log_func):
+    """현재 파일 처리 상태를 디스크에 저장합니다."""
+    serializable_state = {}
+
+    for filepath, state in processed_file_states.items():
+        serializable_state[filepath] = {
+            'last_byte_offset': int(state.get('last_byte_offset', state.get('size', 0))),
+            'size': int(state.get('last_byte_offset', state.get('size', 0))),
+            'last_attempt_time': float(state.get('last_attempt_time', state.get('timestamp', 0))),
+            'seen_line_hashes': sorted(
+                str(item) for item in state.get('seen_line_hashes', set()) if item
+            ),
+        }
+
+    try:
+        os.makedirs(os.path.dirname(PROCESSED_STATE_FILE), exist_ok=True)
+        with open(PROCESSED_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(serializable_state, f, ensure_ascii=False, indent=2)
+        log_func(f"백엔드: 처리 상태 저장 완료 ({PROCESSED_STATE_FILE}).")
+    except Exception as e:
+        log_func(f"오류: 처리 상태 저장 실패 - {e}")
+
 # --- 캐시 관리 함수 (라인 캐시 전용) ---
 def load_line_cache(log_func):
     """ 프로그램 시작 시 라인 캐시 파일을 로드합니다. """
@@ -141,62 +282,55 @@ def load_line_cache(log_func):
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
-                added_lines_cache = set(json.load(f))
+                loaded_lines = json.load(f)
+            added_lines_cache = OrderedDict()
+            if isinstance(loaded_lines, list):
+                remember_global_lines(loaded_lines)
             log_func(f"백엔드: 라인 캐시({cache_path}) 로드됨 ({len(added_lines_cache)}개).")
             
             # 캐시 크기 제한 (메모리 최적화)
             optimize_cache_size(log_func)
         except json.JSONDecodeError:
             log_func(f"경고: 라인 캐시 파일({cache_path}) 형식이 잘못됨. 빈 캐시로 시작.")
-            added_lines_cache = set()
+            added_lines_cache = OrderedDict()
         except Exception as e:
             log_func(f"경고: 라인 캐시 로드 실패 - {e}")
-            added_lines_cache = set()
+            added_lines_cache = OrderedDict()
     else:
         log_func(f"백엔드: 라인 캐시 파일({LINE_CACHE_FILE}) 없음. 새로 시작합니다.")
-        added_lines_cache = set()
+        added_lines_cache = OrderedDict()
 
 def optimize_cache_size(log_func):
     """ 라인 캐시 크기가 너무 크면 일부 항목을 제거합니다. (메모리 최적화) """
-    global added_lines_cache
-    
-    # 최대 캐시 크기 설정 (라인 수)
-    MAX_CACHE_SIZE = 10000
-    
-    if len(added_lines_cache) > MAX_CACHE_SIZE:
-        # 캐시가 너무 크면 일부 항목 제거 (최대 크기의 70%만 유지)
-        target_size = int(MAX_CACHE_SIZE * 0.7)
-        items_to_remove = len(added_lines_cache) - target_size
-        
-        # 캐시는 set이므로 순서가 없음. 임의의 항목을 제거
-        items_to_keep = list(added_lines_cache)[-target_size:]
-        added_lines_cache = set(items_to_keep)
-        
-        log_func(f"백엔드: 라인 캐시 크기 최적화 - {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
-        
-        # 최적화된 캐시 즉시 저장
+    items_to_remove = len(added_lines_cache) - MAX_GLOBAL_CACHE_SIZE
+    if items_to_remove <= 0:
+        return
+
+    for _ in range(items_to_remove):
+        added_lines_cache.popitem(last=False)
+
+    if log_func:
+        log_func(f"백엔드: 라인 캐시 크기 최적화 - 가장 오래된 {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
         try:
             with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(list(added_lines_cache), f, ensure_ascii=False)
+                json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False)
             log_func("백엔드: 최적화된 라인 캐시 저장 완료")
         except Exception as e:
             log_func(f"경고: 최적화된 라인 캐시 저장 실패 - {e}")
 
 def save_line_cache(log_func):
     """ 프로그램 종료 시 라인 캐시 데이터를 파일에 저장합니다. """
-    global added_lines_cache
     log_func(f"백엔드: 라인 캐시 저장 시도 ({len(added_lines_cache)}개)...")
     try:
         with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            # Set은 JSON 직렬화 안되므로 List로 변환
-            json.dump(list(added_lines_cache), f, ensure_ascii=False, indent=4)
+            json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False, indent=4)
         log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
 
 # --- 파일 읽기 헬퍼 함수 ---
-def read_file_with_multiple_encodings(filepath, start_offset, log_func):
-    """ 파일을 여러 인코딩으로 읽기 시도하여 성공하는 내용을 반환 """
+def read_file_with_multiple_encodings(filepath, start_byte_offset, log_func):
+    """파일을 바이트 오프셋 기준으로 읽고, 여러 인코딩으로 디코딩을 시도합니다."""
     backend_logger = logging.getLogger('backend_processor')
     
     # 기본 인코딩 목록
@@ -210,26 +344,40 @@ def read_file_with_multiple_encodings(filepath, start_offset, log_func):
     else:
         encodings = default_encodings
     
+    try:
+        file_size = os.path.getsize(filepath)
+        if start_byte_offset >= file_size:
+            return ""
+
+        with open(filepath, 'rb') as f:
+            if start_byte_offset > 0:
+                f.seek(start_byte_offset)
+            raw_content = f.read()
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        log_func(f"오류: 파일 '{os.path.basename(filepath)}' 바이트 읽기 실패 - {e}")
+        backend_logger.error(f"파일 바이트 읽기 실패: {filepath} - {e}")
+        return None
+
+    if raw_content == b"":
+        return ""
+
     content = None
     successful_encoding = None
     
     for enc in encodings:
         try:
-            with open(filepath, 'r', encoding=enc) as f:
-                if start_offset > 0:
-                    file_size = os.path.getsize(filepath) # 파일 끝 넘어가지 않도록 확인
-                    if start_offset >= file_size: 
-                        content = ""
-                        successful_encoding = enc
-                        break
-                    f.seek(start_offset)
-                content = f.read()
-            backend_logger.debug(f"파일 읽기 성공 ({enc}): {os.path.basename(filepath)}")
+            content = raw_content.decode(enc)
+            backend_logger.debug(f"파일 디코딩 성공 ({enc}): {os.path.basename(filepath)}")
             successful_encoding = enc
             break # 읽기 성공 시 종료
-        except (UnicodeDecodeError, FileNotFoundError, OSError, Exception) as e:
+        except UnicodeDecodeError as e:
             backend_logger.debug(f"인코딩 {enc} 실패: {e}")
             continue # 실패 시 다음 인코딩 시도
+        except Exception as e:
+            backend_logger.debug(f"인코딩 {enc} 처리 중 예외: {e}")
+            continue
     
     # 성공한 인코딩 저장
     if successful_encoding:
@@ -334,13 +482,13 @@ def process_file(filepath, config, services, log_func):
 
     try:
         # --- 1. 새로운 내용 식별 ---
-        current_size = os.path.getsize(filepath)
-        last_size = processed_file_states.get(filepath, {}).get('size', 0)
+        current_byte_size = os.path.getsize(filepath)
+        last_byte_offset = get_last_successful_offset(filepath)
         new_raw_content = None
 
-        if current_size > last_size:
-            new_raw_content = read_file_with_multiple_encodings(filepath, last_size, log_func)
-        elif current_size < last_size:
+        if current_byte_size > last_byte_offset:
+            new_raw_content = read_file_with_multiple_encodings(filepath, last_byte_offset, log_func)
+        elif current_byte_size < last_byte_offset:
             log_func(f"  - 파일 크기 감소 감지. 전체 내용 다시 읽기...")
             # 파일이 다시 작성되었을 가능성이 있으므로 인코딩 정보 초기화
             if filepath in file_encodings:
@@ -353,22 +501,31 @@ def process_file(filepath, config, services, log_func):
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
         if not new_lines:
             backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
         global added_lines_cache
-        truly_new_lines = [line for line in new_lines if line not in added_lines_cache]
+        file_seen_hashes = get_file_seen_hashes(filepath)
+        truly_new_lines = [
+            line for line in new_lines
+            if line not in added_lines_cache and hash_line_for_dedupe(line) not in file_seen_hashes
+        ]
 
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_size, current_time)
+            remember_global_lines(new_lines)
+            remember_file_lines(filepath, new_lines)
+            mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         filtered_content = "\n".join(truly_new_lines) # Docs에 추가할 실제 내용
@@ -408,11 +565,12 @@ def process_file(filepath, config, services, log_func):
 
         # --- 4. 라인 캐시 업데이트 (Docs 업데이트 성공 시) ---
         backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
-        for line in truly_new_lines:
-            added_lines_cache.add(line)
+        remember_global_lines(new_lines)
+        remember_file_lines(filepath, new_lines)
 
         # --- 5. 최종 상태 업데이트 ---
-        mark_file_processed(filepath, current_size, current_time)
+        mark_file_processed(filepath, current_byte_size, current_time)
+        save_processed_state(log_func)
         log_func(f"처리 완료: {os.path.basename(filepath)}")
         backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
 
@@ -421,6 +579,7 @@ def process_file(filepath, config, services, log_func):
          backend_logger.warning(f"파일 처리 중 사라짐: {filepath}")
          if filepath in processed_file_states: del processed_file_states[filepath] # 상태 정보 제거
          if filepath in file_encodings: del file_encodings[filepath] # 인코딩 정보 제거
+         save_processed_state(log_func)
     except Exception as e:
         log_func(f"오류: {os.path.basename(filepath)} 처리 중 예기치 않은 예외 - {e}")
         backend_logger.error(f"파일 처리 중 예기치 않은 예외: {filepath} - {e}", exc_info=True)
@@ -440,6 +599,8 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
 
     load_line_cache(log_func_threadsafe) # 라인 캐시 로드
     backend_logger.info(f"라인 캐시 로드 완료 - 캐시된 라인 수: {len(added_lines_cache)}")
+    load_processed_state(log_func_threadsafe) # 처리 상태 로드
+    backend_logger.info(f"처리 상태 로드 완료 - 추적 파일 수: {len(processed_file_states)}")
 
     google_services = None
     # Google API 서비스 로드 (Docs만 필수)
@@ -530,5 +691,6 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
         log_func_threadsafe("백엔드: 감시자 종료 완료.")
         backend_logger.info("감시자 종료 완료")
         save_line_cache(log_func_threadsafe) # 최종 라인 캐시 저장
+        save_processed_state(log_func_threadsafe) # 최종 처리 상태 저장
         log_func_threadsafe("백엔드: 모든 작업 완료.")
         backend_logger.info("모든 작업 완료")

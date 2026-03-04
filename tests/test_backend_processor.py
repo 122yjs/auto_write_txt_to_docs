@@ -73,16 +73,81 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.added_lines_cache.clear()
         backend_processor.file_queue = queue.Queue()
         FakeTimer.instances.clear()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.original_processed_state_file = backend_processor.PROCESSED_STATE_FILE
+        self.original_line_cache_file = backend_processor.LINE_CACHE_FILE
+        self.original_max_global_cache_size = backend_processor.MAX_GLOBAL_CACHE_SIZE
+        backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
+        backend_processor.LINE_CACHE_FILE = os.path.join(self.temp_dir.name, "added_lines_cache.json")
 
     def tearDown(self):
+        backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
+        backend_processor.LINE_CACHE_FILE = self.original_line_cache_file
+        backend_processor.MAX_GLOBAL_CACHE_SIZE = self.original_max_global_cache_size
         logging.disable(logging.NOTSET)
 
     def create_temp_file(self, content):
-        temp_file = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8")
+        temp_file = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", newline="")
         self.addCleanup(lambda: os.path.exists(temp_file.name) and os.remove(temp_file.name))
         temp_file.write(content)
         temp_file.close()
         return temp_file.name
+
+    def create_temp_bytes_file(self, raw_content):
+        temp_file = tempfile.NamedTemporaryFile("wb", delete=False)
+        self.addCleanup(lambda: os.path.exists(temp_file.name) and os.remove(temp_file.name))
+        temp_file.write(raw_content)
+        temp_file.close()
+        return temp_file.name
+
+    def test_read_file_with_multiple_encodings_uses_utf8_byte_offset(self):
+        initial = "가나다\n"
+        appended = "라마바\n"
+        filepath = self.create_temp_file(initial + appended)
+
+        content = backend_processor.read_file_with_multiple_encodings(
+            filepath,
+            len(initial.encode("utf-8")),
+            lambda _message: None,
+        )
+
+        self.assertEqual(content, appended)
+        self.assertEqual(backend_processor.file_encodings[filepath], "utf-8")
+
+    def test_read_file_with_multiple_encodings_uses_cp949_byte_offset(self):
+        initial = "한글첫줄\n"
+        appended = "한글둘째줄\n"
+        filepath = self.create_temp_bytes_file((initial + appended).encode("cp949"))
+
+        content = backend_processor.read_file_with_multiple_encodings(
+            filepath,
+            len(initial.encode("cp949")),
+            lambda _message: None,
+        )
+
+        self.assertEqual(content, appended)
+        self.assertEqual(backend_processor.file_encodings[filepath], "cp949")
+
+    def test_global_cache_keeps_only_recent_n_lines(self):
+        backend_processor.MAX_GLOBAL_CACHE_SIZE = 3
+
+        backend_processor.remember_global_lines(["첫줄", "둘줄", "셋줄"])
+        backend_processor.remember_global_lines(["둘줄", "넷줄"])
+
+        self.assertEqual(
+            list(backend_processor.added_lines_cache.keys()),
+            ["셋줄", "둘줄", "넷줄"],
+        )
+
+        backend_processor.save_line_cache(lambda _message: None)
+        backend_processor.added_lines_cache.clear()
+        backend_processor.load_line_cache(lambda _message: None)
+
+        self.assertEqual(
+            list(backend_processor.added_lines_cache.keys()),
+            ["셋줄", "둘줄", "넷줄"],
+        )
 
     def test_missing_docs_service_keeps_size_and_schedules_retry(self):
         filepath = self.create_temp_file("새 데이터 한 줄\n")
@@ -93,6 +158,7 @@ class BackendProcessorTests(unittest.TestCase):
 
         state = backend_processor.processed_file_states[filepath]
         self.assertNotIn("size", state)
+        self.assertNotIn("last_byte_offset", state)
         self.assertTrue(state.get("retry_scheduled"))
         self.assertEqual(len(FakeTimer.instances), 1)
         self.assertEqual(FakeTimer.instances[0].interval, backend_processor.RETRY_DELAY)
@@ -117,6 +183,7 @@ class BackendProcessorTests(unittest.TestCase):
 
         state = backend_processor.processed_file_states[filepath]
         self.assertNotIn("size", state)
+        self.assertNotIn("last_byte_offset", state)
         self.assertTrue(state.get("retry_scheduled"))
         self.assertEqual(len(FakeTimer.instances), 1)
         self.assertEqual(len(fake_docs_service.calls), 1)
@@ -135,11 +202,74 @@ class BackendProcessorTests(unittest.TestCase):
         )
 
         state = backend_processor.processed_file_states[filepath]
+        self.assertEqual(state["last_byte_offset"], os.path.getsize(filepath))
         self.assertEqual(state["size"], os.path.getsize(filepath))
         self.assertFalse(state.get("retry_scheduled"))
+        self.assertIn(
+            backend_processor.hash_line_for_dedupe("정상 처리 테스트"),
+            state["seen_line_hashes"],
+        )
         self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("처리 완료" in message for message in logs))
+
+    def test_save_and_load_processed_state_persists_last_byte_offset(self):
+        filepath = self.create_temp_file("상태 저장 테스트\n")
+        backend_processor.processed_file_states[filepath] = {
+            "last_byte_offset": 24,
+            "size": 24,
+            "last_attempt_time": 1234.5,
+            "seen_line_hashes": {"hash-a", "hash-b"},
+            "retry_scheduled": True,
+        }
+
+        backend_processor.save_processed_state(lambda _message: None)
+        backend_processor.processed_file_states.clear()
+        backend_processor.load_processed_state(lambda _message: None)
+
+        state = backend_processor.processed_file_states[filepath]
+        self.assertEqual(state["last_byte_offset"], 24)
+        self.assertEqual(state["size"], 24)
+        self.assertEqual(state["last_attempt_time"], 1234.5)
+        self.assertEqual(state["seen_line_hashes"], {"hash-a", "hash-b"})
+        self.assertFalse(state["retry_scheduled"])
+
+    def test_file_level_dedupe_state_survives_restart(self):
+        filepath = self.create_temp_file("같은 줄\n")
+        first_logs = []
+        first_docs_service = FakeDocsService()
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-4"},
+            {"docs": first_docs_service},
+            first_logs.append,
+        )
+
+        backend_processor.save_processed_state(lambda _message: None)
+        backend_processor.processed_file_states.clear()
+        backend_processor.added_lines_cache.clear()
+        backend_processor.load_processed_state(lambda _message: None)
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+
+        with open(filepath, "w", encoding="utf-8", newline="") as f:
+            f.write("같은 줄\n같은 줄\n")
+
+        second_logs = []
+        second_docs_service = FakeDocsService()
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-4"},
+            {"docs": second_docs_service},
+            second_logs.append,
+        )
+
+        self.assertEqual(len(first_docs_service.calls), 1)
+        self.assertEqual(len(second_docs_service.calls), 0)
+        self.assertEqual(
+            backend_processor.processed_file_states[filepath]["last_byte_offset"],
+            os.path.getsize(filepath),
+        )
 
 
 if __name__ == "__main__":

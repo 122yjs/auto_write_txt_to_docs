@@ -28,7 +28,10 @@ class PathUnificationTests(unittest.TestCase):
     def test_backend_processor_uses_shared_path_constants(self):
         source = Path("src/auto_write_txt_to_docs/backend_processor.py").read_text(encoding="utf-8")
 
-        self.assertIn("from .path_utils import CACHE_FILE_STR, LEGACY_CACHE_FILE_STR, LOG_DIR_STR", source)
+        self.assertIn("CACHE_FILE_STR", source)
+        self.assertIn("LEGACY_CACHE_FILE_STR", source)
+        self.assertIn("LOG_DIR_STR", source)
+        self.assertIn("PROCESSED_STATE_FILE_STR", source)
         self.assertIn("LINE_CACHE_FILE = CACHE_FILE_STR", source)
         self.assertNotIn("PROJECT_ROOT = os.path.dirname", source)
 
