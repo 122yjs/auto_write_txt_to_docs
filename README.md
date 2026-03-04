@@ -43,9 +43,15 @@ auto_write_gui
 1.  **Google API 인증 정보 준비 (`developer_credentials.json`)**:
     *   Google Cloud Console ([https://console.cloud.google.com/](https://console.cloud.google.com/))에서 새 프로젝트를 생성하거나 기존 프로젝트를 선택합니다.
     *   "API 및 서비스" > "사용 설정된 API 및 서비스"에서 "+ API 및 서비스 사용 설정"을 클릭하여 "Google Docs API"와 "Google Drive API"를 검색하여 사용 설정합니다. (Drive API는 파일 생성/관리에 필요할 수 있습니다.)
+    *   **(필수) OAuth 동의 화면 구성**: "API 및 서비스" > "OAuth 동의 화면"으로 이동합니다.
+        *   애플리케이션 유형을 **"외부(External)"**로 선택하고 "만들기"를 클릭합니다.
+        *   **앱 이름**과 **사용자 지원 이메일**을 입력합니다. (다른 항목은 생략 가능)
+        *   "저장 후 계속"을 클릭하여 '범위(Scopes)' 페이지와 '테스트 사용자' 페이지를 진행합니다.
+        *   '테스트 사용자' 페이지에서 이 앱을 사용할 Google 계정 이메일을 추가합니다. (앱이 '테스트' 게시 상태인 동안에는, 여기 등록된 계정만 인증이 가능합니다.)
+        *   ⚠️ **이 단계를 완료해야만 다음 단계에서 OAuth 클라이언트 ID를 만들 수 있습니다.**
     *   "API 및 서비스" > "사용자 인증 정보"에서 "+ 사용자 인증 정보 만들기"를 클릭하고 "OAuth 클라이언트 ID"를 선택합니다.
-    *   애플리케이션 유형을 "데스크톱 앱"으로 선택하고 이름을 지정한 후 "만들기"를 클릭합니다.
-    *   생성된 OAuth 2.0 클라이언트 ID 목록에서 해당 인증 정보를 클릭한 후, 오른쪽 상단의 "JSON 다운로드" 버튼을 클릭하여 인증 정보 파일을 다운로드합니다.
+    *   애플리케이션 유형을 **"데스크톱 앱"**으로 선택하고 이름을 지정한 후 "만들기"를 클릭합니다.
+    *   생성된 OAuth 2.0 클라이언트 ID 목록에서 해당 인증 정보의 **JSON 다운로드**(⬇️ 아이콘) 버튼을 클릭하여 인증 정보 파일을 다운로드합니다.
     *   다운로드한 파일의 이름을 `developer_credentials.json`으로 변경합니다.
     *   **파일 위치**:
         *   **개발 환경**: 프로젝트 내의 `src/auto_write_txt_to_docs/assets/` 폴더에 이 파일을 위치시킵니다. 만약 `assets` 폴더가 없다면 직접 생성해주세요. (전체 경로 예: `auto_write_txt_to_docs/src/auto_write_txt_to_docs/assets/developer_credentials.json`)

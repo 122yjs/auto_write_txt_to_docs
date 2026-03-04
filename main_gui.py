@@ -1893,15 +1893,19 @@ class MessengerDocsApp:
         info_label = ctk.CTkLabel(
             frame,
             text=(
-                "1) 'Google Cloud Console 열기'를 눌러 API를 활성화하고\n"
-                "   OAuth 데스크톱 애플리케이션 자격 증명(JSON)을 다운로드하세요.\n\n"
+                "1) 'Google Cloud Console 열기'를 눌러 아래 순서대로 진행하세요:\n"
+                "   ① Google Docs API 사용 설정\n"
+                "   ② 'OAuth 동의 화면' 구성 (외부 선택 → 앱 이름/이메일 입력\n"
+                "      → 테스트 사용자에 본인 Google 계정 추가)\n"
+                "   ③ '사용자 인증 정보' > OAuth 클라이언트 ID 만들기\n"
+                "      (애플리케이션 유형: 데스크톱 앱) → JSON 다운로드\n\n"
                 "2) 'JSON 파일 선택'을 눌러 다운로드한 파일을 선택하면\n"
                 "   프로그램이 자동으로 developer_credentials.json 으로 복사합니다.\n\n"
                 "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
                 "   프로그램을 다시 실행하거나 감시를 시작하세요."
             ),
             justify="left",
-            wraplength=540
+            wraplength=600
         )
         info_label.pack(fill="x", pady=(0, 15))
 
