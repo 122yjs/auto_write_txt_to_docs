@@ -84,6 +84,20 @@ except ImportError:
     center_window = None
     show_backup_restore_dialog = None
 
+try:
+    from src.auto_write_txt_to_docs.app_dialogs import (
+        show_credentials_wizard_dialog,
+        show_enhanced_error_dialog as show_enhanced_error_dialog_window,
+        show_help_dialog as show_help_dialog_window,
+        show_theme_settings_dialog,
+    )
+except ImportError:
+    logging.error("대화상자 UI 모듈(app_dialogs.py)을 찾을 수 없습니다.")
+    show_credentials_wizard_dialog = None
+    show_enhanced_error_dialog_window = None
+    show_help_dialog_window = None
+    show_theme_settings_dialog = None
+
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
     """ Google Docs URL에서 ID 추출 """
@@ -1212,234 +1226,38 @@ class MessengerDocsApp:
 
     def show_help_dialog(self):
         """초기 실행 시 도움말 표시"""
-        help_window = ctk.CTkToplevel(self.root)
-        help_window.title("메신저 Docs 자동 기록 - 시작 가이드")
-        help_window.geometry("750x650")
-        help_window.minsize(750, 650)
-        help_window.transient(self.root)  # 부모 창 위에 표시
-        help_window.grab_set()  # 모달 창으로 설정
-        
-        # 메인 프레임
-        main_frame = ctk.CTkFrame(help_window)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # 제목
-        title_label = ctk.CTkLabel(
-            main_frame, 
-            text="메신저 Docs 자동 기록 사용 가이드", 
-            font=ctk.CTkFont(size=18, weight="bold")
-        )
-        title_label.pack(pady=(0, 15))
-        
-        # 스크롤 가능한 텍스트 영역
-        help_text = ctk.CTkTextbox(main_frame, wrap="word", height=350)
-        help_text.pack(fill="both", expand=True, padx=10, pady=10)
-        help_text.insert("1.0", """
-📋 프로그램 개요
-이 프로그램은 특정 폴더에 저장되는 텍스트 파일(.txt)의 내용을 자동으로 감지하여 Google Docs 문서에 기록해주는 도구입니다.
+        if not show_help_dialog_window:
+            messagebox.showerror("UI 오류", "도움말 대화상자 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
 
-🔧 기본 설정 방법
-1. 감시 폴더: '폴더 선택...' 버튼을 클릭하여 텍스트 파일이 저장될 폴더를 지정합니다.
-   - 이 폴더에 새로운 .txt 파일이 생성되거나 기존 파일이 수정될 때 내용을 감지합니다.
-
-2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
-   - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
-   - 문서 ID만 직접 입력할 수 있습니다.
-   - '새 문서 만들기' 버튼으로 현재 권한 범위에서 새 문서를 만들고 바로 연결할 수 있습니다.
-   - '기존 주소 입력' 버튼을 누르면 기존 주소/ID 입력칸에 바로 입력할 수 있습니다.
-   - '문서 목록' 버튼으로 이 앱이 접근 가능한 문서 목록에서 선택할 수 있습니다.
-   - 'Docs 웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
-
-3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
-
-🚀 사용 방법
-1. '감시 시작' 버튼을 클릭하면 지정된 폴더의 감시가 시작됩니다.
-2. 감시 중에는 폴더 내 .txt 파일의 변경이 자동으로 감지됩니다.
-3. 감지된 새 내용은 Google Docs 문서의 맨 위에 타임스탬프와 함께 추가됩니다.
-4. '감시 중지' 버튼을 클릭하면 감시가 중단됩니다.
-
-🔔 트레이 아이콘 기능
-- 창을 닫아도 프로그램은 트레이 아이콘으로 계속 실행됩니다.
-- 트레이 아이콘을 우클릭하여 창 보이기/숨기기 또는 프로그램 종료가 가능합니다.
-
-📝 로그 확인
-- 프로그램 하단의 로그 창에서 실시간 작업 내역을 확인할 수 있습니다.
-- '로그 폴더 열기' 버튼을 클릭하면 상세 로그 파일이 저장된 폴더를 열 수 있습니다.
-
-❓ 문제 해결
-- Google 인증 오류: 인증 파일이 올바르게 설치되었는지 확인하세요.
-- 연결 오류: 인터넷 연결 상태를 확인하세요.
-- 권한 오류: Google 계정에 문서 편집 권한이 있는지 확인하세요.
-        """)
-        help_text.configure(state="disabled")  # 읽기 전용으로 설정
-        
-        # 체크박스 (다음에 표시 여부)
-        checkbox_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        checkbox_frame.pack(fill="x", pady=(10, 0))
-        
-        show_on_startup_checkbox = ctk.CTkCheckBox(
-            checkbox_frame, 
-            text="프로그램 시작 시 이 도움말 표시",
-            variable=self.show_help_on_startup,
-            onvalue=True,
-            offvalue=False
-        )
-        show_on_startup_checkbox.pack(side="left", padx=10)
-        
-        # 닫기 버튼
-        close_button = ctk.CTkButton(
-            main_frame, 
-            text="닫기", 
-            command=help_window.destroy,
-            width=100
-        )
-        close_button.pack(pady=(10, 0))
-        
-        # 창이 닫힐 때 설정 저장
         def on_help_close():
-            self.settings_changed = True  # 설정 변경 플래그 설정
-            help_window.destroy()
-        
-        help_window.protocol("WM_DELETE_WINDOW", on_help_close)
-        
-        # 창 중앙 배치
-        help_window.update_idletasks()
-        width = help_window.winfo_width()
-        height = help_window.winfo_height()
-        x = (help_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (help_window.winfo_screenheight() // 2) - (height // 2)
-        help_window.geometry(f"{width}x{height}+{x}+{y}")
+            self.settings_changed = True
+
+        show_help_dialog_window(
+            self.root,
+            show_help_on_startup=self.show_help_on_startup,
+            on_window_close=on_help_close,
+            ctk_module=ctk,
+            center_window_func=center_window,
+        )
 
     def show_enhanced_error_dialog(self, error_type, error_message):
         """
         개선된 오류 대화 상자를 표시합니다.
         오류 유형에 따라 단계별 해결 방법을 제공합니다.
         """
-        error_window = ctk.CTkToplevel(self.root)
-        error_window.title("오류 발생")
-        error_window.geometry("750x550")
-        error_window.minsize(750, 550)
-        error_window.transient(self.root)  # 부모 창 위에 표시
-        error_window.grab_set()  # 모달 창으로 설정
-        
-        # 메인 프레임
-        main_frame = ctk.CTkFrame(error_window)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # 오류 아이콘 및 제목
-        header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        header_frame.pack(fill="x", pady=(0, 15))
-        
-        # 오류 제목
-        title_label = ctk.CTkLabel(
-            header_frame, 
-            text=f"오류 발생: {error_type}", 
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color="#FF5252"  # 빨간색
+        if not show_enhanced_error_dialog_window:
+            messagebox.showerror(error_type, error_message, parent=self.root)
+            return
+
+        show_enhanced_error_dialog_window(
+            self.root,
+            error_type=error_type,
+            error_message=error_message,
+            on_open_logs=lambda: self.open_folder_in_explorer(LOG_DIR_STR),
+            ctk_module=ctk,
+            center_window_func=center_window,
         )
-        title_label.pack(pady=(0, 5))
-        
-        # 구분선
-        separator = ctk.CTkFrame(main_frame, height=2, fg_color="#CCCCCC")
-        separator.pack(fill="x", pady=(0, 15))
-        
-        # 오류 내용 프레임
-        content_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        content_frame.pack(fill="both", expand=True)
-        
-        # 오류 메시지
-        error_label = ctk.CTkLabel(
-            content_frame,
-            text="오류 내용:",
-            font=ctk.CTkFont(weight="bold"),
-            anchor="w"
-        )
-        error_label.pack(fill="x", anchor="w")
-        
-        # 오류 메시지 텍스트 박스
-        error_text = ctk.CTkTextbox(content_frame, height=80)
-        error_text.pack(fill="x", pady=(5, 15))
-        error_text.insert("1.0", error_message)
-        error_text.configure(state="disabled")  # 읽기 전용
-        
-        # 해결 방법 제목
-        solution_label = ctk.CTkLabel(
-            content_frame,
-            text="해결 방법:",
-            font=ctk.CTkFont(weight="bold"),
-            anchor="w"
-        )
-        solution_label.pack(fill="x", anchor="w")
-        
-        # 해결 방법 텍스트 박스
-        solution_text = ctk.CTkTextbox(content_frame, height=150)
-        solution_text.pack(fill="both", expand=True, pady=(5, 15))
-        
-        # 오류 유형에 따른 해결 방법
-        solution = ""
-        if "Google 인증 오류" in error_type:
-            solution = """1. 인터넷 연결 상태를 확인하세요.
-2. 'developer_credentials.json' 파일이 올바른 위치에 있는지 확인하세요.
-3. Google 계정에 로그인이 되어 있는지 확인하세요.
-4. 브라우저에서 Google 계정에 로그인한 후 다시 시도하세요.
-5. 토큰이 만료되었다면, 프로그램을 재시작하여 새로운 인증을 시도하세요.
-6. 계속 문제가 발생한다면, 'token.json' 파일을 삭제하고 다시 시도하세요."""
-        elif "Docs API 오류" in error_type:
-            solution = """1. Google Docs 문서 ID가 올바른지 확인하세요.
-2. 해당 Google Docs 문서에 대한 편집 권한이 있는지 확인하세요.
-3. Google API 할당량이 초과되었을 수 있습니다. 잠시 후 다시 시도하세요.
-4. 인터넷 연결 상태를 확인하세요.
-5. 브라우저에서 해당 문서에 직접 접근이 가능한지 확인하세요."""
-        elif "파일 접근 오류" in error_type:
-            solution = """1. 감시 중인 폴더가 존재하는지 확인하세요.
-2. 폴더에 대한 읽기 권한이 있는지 확인하세요.
-3. 다른 프로그램이 파일을 사용 중인지 확인하세요.
-4. 파일이 이동되거나 삭제되었을 수 있습니다. 파일 존재 여부를 확인하세요.
-5. 파일 경로에 특수 문자가 포함되어 있는지 확인하세요."""
-        elif "감시 시스템 오류" in error_type:
-            solution = """1. 감시 폴더가 올바르게 설정되었는지 확인하세요.
-2. 폴더 경로가 너무 길거나 특수 문자를 포함하고 있는지 확인하세요.
-3. 프로그램을 재시작하여 감시 시스템을 초기화하세요.
-4. 시스템 리소스(메모리, CPU)가 부족하지 않은지 확인하세요."""
-        else:
-            solution = """1. 인터넷 연결 상태를 확인하세요.
-2. 프로그램 설정이 올바른지 확인하세요.
-3. 프로그램을 재시작하여 다시 시도하세요.
-4. 오류가 계속되면 로그 파일을 확인하여 더 자세한 정보를 얻으세요.
-5. 필요한 경우 개발자에게 문의하세요."""
-        
-        solution_text.insert("1.0", solution)
-        solution_text.configure(state="disabled")  # 읽기 전용
-        
-        # 버튼 프레임
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(15, 0))
-        
-        # 로그 보기 버튼
-        log_button = ctk.CTkButton(
-            button_frame,
-            text="로그 폴더 열기",
-            command=lambda: self.open_folder_in_explorer(LOG_DIR_STR),
-            width=120
-        )
-        log_button.pack(side="left", padx=10)
-        
-        # 닫기 버튼
-        close_button = ctk.CTkButton(
-            button_frame,
-            text="닫기",
-            command=error_window.destroy,
-            width=120
-        )
-        close_button.pack(side="right", padx=10)
-        
-        # 창 중앙 배치
-        error_window.update_idletasks()
-        width = error_window.winfo_width()
-        height = error_window.winfo_height()
-        x = (error_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (error_window.winfo_screenheight() // 2) - (height // 2)
-        error_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def clear_log(self):
         """로그 텍스트 지우기"""
@@ -1773,118 +1591,24 @@ class MessengerDocsApp:
     
     def show_theme_settings(self):
         """테마 설정 대화 상자"""
-        theme_window = ctk.CTkToplevel(self.root)
-        theme_window.title("테마 설정")
-        theme_window.geometry("500x300")
-        theme_window.minsize(500, 300)
-        theme_window.transient(self.root)  # 부모 창 위에 표시
-        theme_window.grab_set()  # 모달 창으로 설정
-        
-        # 메인 프레임
-        main_frame = ctk.CTkFrame(theme_window)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # 제목
-        title_label = ctk.CTkLabel(
-            main_frame, 
-            text="테마 설정", 
-            font=ctk.CTkFont(size=16, weight="bold")
-        )
-        title_label.pack(pady=(0, 15))
-        
-        # 테마 모드 선택 프레임
-        mode_frame = ctk.CTkFrame(main_frame)
-        mode_frame.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            mode_frame, 
-            text="테마 모드:", 
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", pady=(0, 5))
-        
-        # 라디오 버튼 변수
-        mode_var = ctk.StringVar(value=self.appearance_mode.get())
-        
-        # 라디오 버튼 생성
-        modes = [("시스템 설정 따름", "System"), ("라이트 모드", "Light"), ("다크 모드", "Dark")]
-        
-        for text, value in modes:
-            radio = ctk.CTkRadioButton(
-                mode_frame,
-                text=text,
-                value=value,
-                variable=mode_var
-            )
-            radio.pack(anchor="w", pady=5, padx=10)
-        
-        # 미리보기 프레임
-        preview_frame = ctk.CTkFrame(main_frame)
-        preview_frame.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            preview_frame,
-            text="미리보기:",
-            font=ctk.CTkFont(weight="bold")
-        ).pack(anchor="w", pady=(0, 5))
-        
-        # 미리보기 요소들
-        preview_elements = ctk.CTkFrame(preview_frame)
-        preview_elements.pack(fill="x", pady=5, padx=10)
-        
-        ctk.CTkButton(
-            preview_elements,
-            text="버튼",
-            width=80
-        ).pack(side="left", padx=(0, 10))
-        
-        ctk.CTkEntry(
-            preview_elements,
-            width=120,
-            placeholder_text="입력 필드"
-        ).pack(side="left")
-        
-        # 버튼 프레임
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(15, 0))
-        
-        # 적용 버튼
-        def apply_theme():
-            new_mode = mode_var.get()
+        if not show_theme_settings_dialog:
+            messagebox.showerror("UI 오류", "테마 설정 대화상자 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        def apply_theme(new_mode):
             if new_mode != self.appearance_mode.get():
                 self.appearance_mode.set(new_mode)
                 ctk.set_appearance_mode(new_mode)
                 self.log(f"테마 변경: {new_mode} 모드")
                 self.settings_changed = True
-            theme_window.destroy()
-        
-        apply_button = ctk.CTkButton(
-            button_frame,
-            text="적용",
-            command=apply_theme,
-            width=100
+
+        show_theme_settings_dialog(
+            self.root,
+            current_mode=self.appearance_mode.get(),
+            on_apply_theme=apply_theme,
+            ctk_module=ctk,
+            center_window_func=center_window,
         )
-        apply_button.pack(side="right", padx=(5, 0))
-        
-        # 취소 버튼
-        cancel_button = ctk.CTkButton(
-            button_frame,
-            text="취소",
-            command=theme_window.destroy,
-            width=100,
-            fg_color="gray"
-        )
-        cancel_button.pack(side="right", padx=5)
-        
-        # 창 중앙 배치
-        if center_window:
-            center_window(theme_window)
-        else:
-            theme_window.update_idletasks()
-            width = theme_window.winfo_width()
-            height = theme_window.winfo_height()
-            x = (theme_window.winfo_screenwidth() // 2) - (width // 2)
-            y = (theme_window.winfo_screenheight() // 2) - (height // 2)
-            theme_window.geometry(f"{width}x{height}+{x}+{y}")
 
     def backup_settings(self):
         """현재 설정을 백업 파일로 저장"""
@@ -2043,107 +1767,52 @@ class MessengerDocsApp:
     # --- 새로 추가: Google 인증 설정 마법사 ---
     def show_credentials_wizard(self):
         """Google Cloud Console 안내 및 credentials.json 복사를 돕는 설정 마법사"""
-        wizard = ctk.CTkToplevel(self.root)
-        wizard.title("Google 인증 설정 마법사")
-        wizard.geometry("700x500")
-        wizard.minsize(700, 500)
-        wizard.transient(self.root)
-        wizard.grab_set()
-
-        # 메인 프레임
-        frame = ctk.CTkFrame(wizard)
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # 안내 라벨
-        info_label = ctk.CTkLabel(
-            frame,
-            text=(
-                "1) 'Google Cloud Console 열기'를 눌러 API를 활성화하고\n"
-                "   OAuth 데스크톱 애플리케이션 자격 증명(JSON)을 다운로드하세요.\n\n"
-                "2) 'JSON 파일 선택'을 눌러 다운로드한 파일을 선택하면\n"
-                "   프로그램이 사용자 설정 폴더의 developer_credentials.json 으로 복사합니다.\n\n"
-                "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
-                "   프로그램을 다시 실행하거나 감시를 시작하세요."
-            ),
-            justify="left",
-            wraplength=540
-        )
-        info_label.pack(fill="x", pady=(0, 15))
-
-        # 버튼 영역
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=(0, 10))
-
-        # Google Console 열기
-        console_btn = ctk.CTkButton(
-            btn_frame,
-            text="Google Cloud Console 열기",
-            command=lambda: webbrowser.open("https://console.cloud.google.com/")
-        )
-        console_btn.pack(fill="x", pady=5)
-
-        # 결과 라벨 (상태 표시)
-        result_label = ctk.CTkLabel(
-            frame,
-            text=f"JSON 파일을 아직 선택하지 않았습니다.\n복사 대상: {USER_CREDENTIALS_FILE_STR}"
-        )
-        result_label.pack(fill="x", pady=(10, 5))
-
-        # USER_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
         if not USER_CREDENTIALS_FILE_STR:
             messagebox.showerror(
                 "경로 오류",
                 "인증 파일 저장 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
-                parent=wizard
+                parent=self.root,
             )
-            wizard.destroy()
+            return
+
+        if not show_credentials_wizard_dialog:
+            messagebox.showerror("UI 오류", "인증 설정 마법사 모듈을 불러오지 못했습니다.", parent=self.root)
             return
 
         credentials_target = Path(str(USER_CREDENTIALS_FILE_STR))
 
-        # JSON 선택 → 복사
-        def select_and_copy_json():
+        def select_and_copy_json(update_status):
             file_path = filedialog.askopenfilename(
                 title="credentials.json 선택",
-                filetypes=[("JSON 파일", "*.json")]
+                filetypes=[("JSON 파일", "*.json")],
             )
             if not file_path:
                 return
+
             try:
                 credentials_target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(file_path, credentials_target)
                 self.log(f"인증 파일 복사 완료: {credentials_target}")
-                result_label.configure(text="복사 완료! 테스트 중...", text_color="green")
-                wizard.update_idletasks()
-                # 복사 후 바로 테스트
+                update_status("복사 완료! 테스트 중...", "green")
+
                 if credentials_target.exists():
-                    result_label.configure(text="테스트 성공! ✅ 인증 파일이 준비되었습니다.", text_color="green")
-                    # 즉시 재확인하여 메인 상태도 반영
+                    update_status("테스트 성공! ✅ 인증 파일이 준비되었습니다.", "green")
                     self.check_credentials_file()
                 else:
-                    result_label.configure(text="테스트 실패 ❌ 파일을 찾을 수 없습니다.", text_color="red")
+                    update_status("테스트 실패 ❌ 파일을 찾을 수 없습니다.", "red")
             except Exception as e:
                 self.log(f"인증 파일 복사 실패: {e}")
-                messagebox.showerror("복사 실패", str(e), parent=wizard)
-                result_label.configure(text="복사 실패 ❌", text_color="red")
+                messagebox.showerror("복사 실패", str(e), parent=self.root)
+                update_status("복사 실패 ❌", "red")
 
-        json_btn = ctk.CTkButton(
-            btn_frame,
-            text="JSON 파일 선택",
-            command=select_and_copy_json
+        show_credentials_wizard_dialog(
+            self.root,
+            credentials_target_text=USER_CREDENTIALS_FILE_STR,
+            on_open_console=lambda: webbrowser.open("https://console.cloud.google.com/"),
+            on_select_json=select_and_copy_json,
+            ctk_module=ctk,
+            center_window_func=center_window,
         )
-        json_btn.pack(fill="x", pady=5)
-
-        # 닫기 버튼
-        close_btn = ctk.CTkButton(frame, text="닫기", command=wizard.destroy)
-        close_btn.pack(pady=(20, 0))
-
-        # 창 중앙 배치
-        wizard.update_idletasks()
-        w, h = wizard.winfo_width(), wizard.winfo_height()
-        x = (wizard.winfo_screenwidth() // 2) - (w // 2)
-        y = (wizard.winfo_screenheight() // 2) - (h // 2)
-        wizard.geometry(f"{w}x{h}+{x}+{y}")
 
     # ---------------- 메뉴바 생성 ----------------
     def _create_menubar(self):
