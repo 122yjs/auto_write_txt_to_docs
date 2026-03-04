@@ -76,10 +76,15 @@ class BackendProcessorTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.original_processed_state_file = backend_processor.PROCESSED_STATE_FILE
+        self.original_line_cache_file = backend_processor.LINE_CACHE_FILE
+        self.original_max_global_cache_size = backend_processor.MAX_GLOBAL_CACHE_SIZE
         backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
+        backend_processor.LINE_CACHE_FILE = os.path.join(self.temp_dir.name, "added_lines_cache.json")
 
     def tearDown(self):
         backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
+        backend_processor.LINE_CACHE_FILE = self.original_line_cache_file
+        backend_processor.MAX_GLOBAL_CACHE_SIZE = self.original_max_global_cache_size
         logging.disable(logging.NOTSET)
 
     def create_temp_file(self, content):
@@ -123,6 +128,26 @@ class BackendProcessorTests(unittest.TestCase):
 
         self.assertEqual(content, appended)
         self.assertEqual(backend_processor.file_encodings[filepath], "cp949")
+
+    def test_global_cache_keeps_only_recent_n_lines(self):
+        backend_processor.MAX_GLOBAL_CACHE_SIZE = 3
+
+        backend_processor.remember_global_lines(["첫줄", "둘줄", "셋줄"])
+        backend_processor.remember_global_lines(["둘줄", "넷줄"])
+
+        self.assertEqual(
+            list(backend_processor.added_lines_cache.keys()),
+            ["셋줄", "둘줄", "넷줄"],
+        )
+
+        backend_processor.save_line_cache(lambda _message: None)
+        backend_processor.added_lines_cache.clear()
+        backend_processor.load_line_cache(lambda _message: None)
+
+        self.assertEqual(
+            list(backend_processor.added_lines_cache.keys()),
+            ["셋줄", "둘줄", "넷줄"],
+        )
 
     def test_missing_docs_service_keeps_size_and_schedules_retry(self):
         filepath = self.create_temp_file("새 데이터 한 줄\n")

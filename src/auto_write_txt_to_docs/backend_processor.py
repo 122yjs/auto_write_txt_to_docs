@@ -11,6 +11,7 @@ from googleapiclient.errors import HttpError
 import traceback
 import logging
 import hashlib
+from collections import OrderedDict
 from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유지
 
 # google_auth 모듈 임포트
@@ -40,6 +41,7 @@ processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 RETRY_DELAY = 5.0
+MAX_GLOBAL_CACHE_SIZE = 10000
 
 # 로깅 설정
 def setup_backend_logging():
@@ -71,7 +73,7 @@ def setup_backend_logging():
     return logger
 
 # 라인 캐시 관련 설정
-added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
+added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
 LINE_CACHE_FILE = CACHE_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
@@ -111,6 +113,21 @@ def remember_file_lines(filepath, lines):
     seen_hashes = get_file_seen_hashes(filepath)
     for line in lines:
         seen_hashes.add(hash_line_for_dedupe(line))
+
+
+def remember_global_lines(lines):
+    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다."""
+    if not lines:
+        return
+
+    for line in lines:
+        normalized_line = str(line)
+        if normalized_line in added_lines_cache:
+            added_lines_cache.move_to_end(normalized_line)
+        else:
+            added_lines_cache[normalized_line] = None
+
+    optimize_cache_size(None)
 
 
 def get_last_attempt_time(filepath):
@@ -265,55 +282,48 @@ def load_line_cache(log_func):
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
-                added_lines_cache = set(json.load(f))
+                loaded_lines = json.load(f)
+            added_lines_cache = OrderedDict()
+            if isinstance(loaded_lines, list):
+                remember_global_lines(loaded_lines)
             log_func(f"백엔드: 라인 캐시({cache_path}) 로드됨 ({len(added_lines_cache)}개).")
             
             # 캐시 크기 제한 (메모리 최적화)
             optimize_cache_size(log_func)
         except json.JSONDecodeError:
             log_func(f"경고: 라인 캐시 파일({cache_path}) 형식이 잘못됨. 빈 캐시로 시작.")
-            added_lines_cache = set()
+            added_lines_cache = OrderedDict()
         except Exception as e:
             log_func(f"경고: 라인 캐시 로드 실패 - {e}")
-            added_lines_cache = set()
+            added_lines_cache = OrderedDict()
     else:
         log_func(f"백엔드: 라인 캐시 파일({LINE_CACHE_FILE}) 없음. 새로 시작합니다.")
-        added_lines_cache = set()
+        added_lines_cache = OrderedDict()
 
 def optimize_cache_size(log_func):
     """ 라인 캐시 크기가 너무 크면 일부 항목을 제거합니다. (메모리 최적화) """
-    global added_lines_cache
-    
-    # 최대 캐시 크기 설정 (라인 수)
-    MAX_CACHE_SIZE = 10000
-    
-    if len(added_lines_cache) > MAX_CACHE_SIZE:
-        # 캐시가 너무 크면 일부 항목 제거 (최대 크기의 70%만 유지)
-        target_size = int(MAX_CACHE_SIZE * 0.7)
-        items_to_remove = len(added_lines_cache) - target_size
-        
-        # 캐시는 set이므로 순서가 없음. 임의의 항목을 제거
-        items_to_keep = list(added_lines_cache)[-target_size:]
-        added_lines_cache = set(items_to_keep)
-        
-        log_func(f"백엔드: 라인 캐시 크기 최적화 - {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
-        
-        # 최적화된 캐시 즉시 저장
+    items_to_remove = len(added_lines_cache) - MAX_GLOBAL_CACHE_SIZE
+    if items_to_remove <= 0:
+        return
+
+    for _ in range(items_to_remove):
+        added_lines_cache.popitem(last=False)
+
+    if log_func:
+        log_func(f"백엔드: 라인 캐시 크기 최적화 - 가장 오래된 {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
         try:
             with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(list(added_lines_cache), f, ensure_ascii=False)
+                json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False)
             log_func("백엔드: 최적화된 라인 캐시 저장 완료")
         except Exception as e:
             log_func(f"경고: 최적화된 라인 캐시 저장 실패 - {e}")
 
 def save_line_cache(log_func):
     """ 프로그램 종료 시 라인 캐시 데이터를 파일에 저장합니다. """
-    global added_lines_cache
     log_func(f"백엔드: 라인 캐시 저장 시도 ({len(added_lines_cache)}개)...")
     try:
         with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            # Set은 JSON 직렬화 안되므로 List로 변환
-            json.dump(list(added_lines_cache), f, ensure_ascii=False, indent=4)
+            json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False, indent=4)
         log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
@@ -512,6 +522,7 @@ def process_file(filepath, config, services, log_func):
 
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
+            remember_global_lines(new_lines)
             remember_file_lines(filepath, new_lines)
             mark_file_processed(filepath, current_byte_size, current_time)
             save_processed_state(log_func)
@@ -554,8 +565,7 @@ def process_file(filepath, config, services, log_func):
 
         # --- 4. 라인 캐시 업데이트 (Docs 업데이트 성공 시) ---
         backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
-        for line in truly_new_lines:
-            added_lines_cache.add(line)
+        remember_global_lines(new_lines)
         remember_file_lines(filepath, new_lines)
 
         # --- 5. 최종 상태 업데이트 ---
