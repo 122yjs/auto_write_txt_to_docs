@@ -180,6 +180,10 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(state["last_byte_offset"], os.path.getsize(filepath))
         self.assertEqual(state["size"], os.path.getsize(filepath))
         self.assertFalse(state.get("retry_scheduled"))
+        self.assertIn(
+            backend_processor.hash_line_for_dedupe("정상 처리 테스트"),
+            state["seen_line_hashes"],
+        )
         self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("처리 완료" in message for message in logs))
@@ -190,6 +194,7 @@ class BackendProcessorTests(unittest.TestCase):
             "last_byte_offset": 24,
             "size": 24,
             "last_attempt_time": 1234.5,
+            "seen_line_hashes": {"hash-a", "hash-b"},
             "retry_scheduled": True,
         }
 
@@ -201,7 +206,45 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(state["last_byte_offset"], 24)
         self.assertEqual(state["size"], 24)
         self.assertEqual(state["last_attempt_time"], 1234.5)
+        self.assertEqual(state["seen_line_hashes"], {"hash-a", "hash-b"})
         self.assertFalse(state["retry_scheduled"])
+
+    def test_file_level_dedupe_state_survives_restart(self):
+        filepath = self.create_temp_file("같은 줄\n")
+        first_logs = []
+        first_docs_service = FakeDocsService()
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-4"},
+            {"docs": first_docs_service},
+            first_logs.append,
+        )
+
+        backend_processor.save_processed_state(lambda _message: None)
+        backend_processor.processed_file_states.clear()
+        backend_processor.added_lines_cache.clear()
+        backend_processor.load_processed_state(lambda _message: None)
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+
+        with open(filepath, "w", encoding="utf-8", newline="") as f:
+            f.write("같은 줄\n같은 줄\n")
+
+        second_logs = []
+        second_docs_service = FakeDocsService()
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-4"},
+            {"docs": second_docs_service},
+            second_logs.append,
+        )
+
+        self.assertEqual(len(first_docs_service.calls), 1)
+        self.assertEqual(len(second_docs_service.calls), 0)
+        self.assertEqual(
+            backend_processor.processed_file_states[filepath]["last_byte_offset"],
+            os.path.getsize(filepath),
+        )
 
 
 if __name__ == "__main__":

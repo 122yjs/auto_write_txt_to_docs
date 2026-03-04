@@ -10,6 +10,7 @@ import threading
 from googleapiclient.errors import HttpError
 import traceback
 import logging
+import hashlib
 from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유지
 
 # google_auth 모듈 임포트
@@ -78,6 +79,38 @@ PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 def get_file_state(filepath):
     """파일별 처리 상태 딕셔너리를 반환합니다."""
     return processed_file_states.setdefault(filepath, {})
+
+
+def hash_line_for_dedupe(line):
+    """라인 문자열을 파일별 중복 판정용 해시로 변환합니다."""
+    return hashlib.sha256(line.encode('utf-8')).hexdigest()
+
+
+def get_file_seen_hashes(filepath):
+    """파일별로 이미 처리한 라인 해시 집합을 반환합니다."""
+    state = get_file_state(filepath)
+    seen_hashes = state.get('seen_line_hashes')
+
+    if isinstance(seen_hashes, set):
+        return seen_hashes
+
+    if isinstance(seen_hashes, list):
+        seen_hashes = {str(item) for item in seen_hashes if item}
+    else:
+        seen_hashes = set()
+
+    state['seen_line_hashes'] = seen_hashes
+    return seen_hashes
+
+
+def remember_file_lines(filepath, lines):
+    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다."""
+    if not lines:
+        return
+
+    seen_hashes = get_file_seen_hashes(filepath)
+    for line in lines:
+        seen_hashes.add(hash_line_for_dedupe(line))
 
 
 def get_last_attempt_time(filepath):
@@ -182,6 +215,9 @@ def load_processed_state(log_func):
                 'last_byte_offset': byte_offset,
                 'size': byte_offset,
                 'last_attempt_time': last_attempt_time,
+                'seen_line_hashes': {
+                    str(item) for item in state.get('seen_line_hashes', []) if item
+                },
                 'retry_scheduled': False,
             }
 
@@ -204,6 +240,9 @@ def save_processed_state(log_func):
             'last_byte_offset': int(state.get('last_byte_offset', state.get('size', 0))),
             'size': int(state.get('last_byte_offset', state.get('size', 0))),
             'last_attempt_time': float(state.get('last_attempt_time', state.get('timestamp', 0))),
+            'seen_line_hashes': sorted(
+                str(item) for item in state.get('seen_line_hashes', set()) if item
+            ),
         }
 
     try:
@@ -465,10 +504,15 @@ def process_file(filepath, config, services, log_func):
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
         global added_lines_cache
-        truly_new_lines = [line for line in new_lines if line not in added_lines_cache]
+        file_seen_hashes = get_file_seen_hashes(filepath)
+        truly_new_lines = [
+            line for line in new_lines
+            if line not in added_lines_cache and hash_line_for_dedupe(line) not in file_seen_hashes
+        ]
 
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
+            remember_file_lines(filepath, new_lines)
             mark_file_processed(filepath, current_byte_size, current_time)
             save_processed_state(log_func)
             return
@@ -512,6 +556,7 @@ def process_file(filepath, config, services, log_func):
         backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
         for line in truly_new_lines:
             added_lines_cache.add(line)
+        remember_file_lines(filepath, new_lines)
 
         # --- 5. 최종 상태 업데이트 ---
         mark_file_processed(filepath, current_byte_size, current_time)
