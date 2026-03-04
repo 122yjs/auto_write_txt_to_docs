@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "auto_write"
+name = "auto_write_txt_to_docs"
 version = "0.1.0"
 authors = [
-  { name="Your Name", email="you@example.com" },
+  { name="122yjs" },
 ]
-description = "A small example package"
+description = "텍스트 파일 변경 내용을 Google Docs에 자동으로 기록하는 데스크톱 앱"
 readme = "README.md"
 requires-python = ">=3.7"
 classifiers = [
@@ -17,18 +17,27 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "customtkinter",
-    "pystray",
-    "Pillow",
-    "watchdog",
-    "google-api-python-client",
-    "google-auth-httplib2",
-    "google-auth-oauthlib"
+    "customtkinter>=5.2.0",
+    "Pillow>=10.0.0",
+    "watchdog>=3.0.0",
+    "google-api-python-client>=2.100.0",
+    "google-auth-httplib2>=0.1.0",
+    "google-auth-oauthlib>=1.1.0",
+    "psutil>=5.9.5",
+    "pystray>=0.19.0",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/yourusername/auto_write"
-"Bug Tracker" = "https://github.com/yourusername/auto_write/issues"
+"Homepage" = "https://github.com/122yjs/auto_write_txt_to_docs"
+"Bug Tracker" = "https://github.com/122yjs/auto_write_txt_to_docs/issues"
 
 [project.scripts]
-auto_write_gui = "src.main_gui:main"  # main_gui.py에 main 함수가 있다고 가정
+auto_write_gui = "main_gui:main"
+
+[tool.setuptools]
+py-modules = ["main_gui"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+namespaces = true
