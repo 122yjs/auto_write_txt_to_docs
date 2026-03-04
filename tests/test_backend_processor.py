@@ -73,8 +73,13 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.added_lines_cache.clear()
         backend_processor.file_queue = queue.Queue()
         FakeTimer.instances.clear()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.original_processed_state_file = backend_processor.PROCESSED_STATE_FILE
+        backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
 
     def tearDown(self):
+        backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
         logging.disable(logging.NOTSET)
 
     def create_temp_file(self, content):
@@ -178,6 +183,25 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("처리 완료" in message for message in logs))
+
+    def test_save_and_load_processed_state_persists_last_byte_offset(self):
+        filepath = self.create_temp_file("상태 저장 테스트\n")
+        backend_processor.processed_file_states[filepath] = {
+            "last_byte_offset": 24,
+            "size": 24,
+            "last_attempt_time": 1234.5,
+            "retry_scheduled": True,
+        }
+
+        backend_processor.save_processed_state(lambda _message: None)
+        backend_processor.processed_file_states.clear()
+        backend_processor.load_processed_state(lambda _message: None)
+
+        state = backend_processor.processed_file_states[filepath]
+        self.assertEqual(state["last_byte_offset"], 24)
+        self.assertEqual(state["size"], 24)
+        self.assertEqual(state["last_attempt_time"], 1234.5)
+        self.assertFalse(state["retry_scheduled"])
 
 
 if __name__ == "__main__":

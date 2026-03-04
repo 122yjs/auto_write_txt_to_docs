@@ -20,12 +20,18 @@ except ImportError:
     get_google_services = None
 
 try:
-    from .path_utils import CACHE_FILE_STR, LEGACY_CACHE_FILE_STR, LOG_DIR_STR
+    from .path_utils import (
+        CACHE_FILE_STR,
+        LEGACY_CACHE_FILE_STR,
+        LOG_DIR_STR,
+        PROCESSED_STATE_FILE_STR,
+    )
 except ImportError:
     project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
     LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
     LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
+    PROCESSED_STATE_FILE_STR = os.path.join(project_root_fallback, "processed_state.json")
 
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
@@ -66,6 +72,7 @@ def setup_backend_logging():
 # 라인 캐시 관련 설정
 added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
 LINE_CACHE_FILE = CACHE_FILE_STR
+PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
 
 def get_file_state(filepath):
@@ -135,6 +142,77 @@ def schedule_retry(filepath, log_func, reason, current_time=None):
     retry_timer = threading.Timer(RETRY_DELAY, requeue_file)
     retry_timer.daemon = True
     retry_timer.start()
+
+
+def load_processed_state(log_func):
+    """이전 실행에서 저장된 파일 처리 상태를 로드합니다."""
+    global processed_file_states
+
+    if not os.path.exists(PROCESSED_STATE_FILE):
+        log_func(f"백엔드: 처리 상태 파일({PROCESSED_STATE_FILE}) 없음. 새로 시작합니다.")
+        processed_file_states = {}
+        return
+
+    try:
+        with open(PROCESSED_STATE_FILE, 'r', encoding='utf-8') as f:
+            loaded_state = json.load(f)
+
+        if not isinstance(loaded_state, dict):
+            raise ValueError("처리 상태 파일 최상위 구조가 dict가 아닙니다.")
+
+        sanitized_state = {}
+        for filepath, state in loaded_state.items():
+            if not isinstance(filepath, str) or not isinstance(state, dict):
+                continue
+
+            byte_offset = state.get('last_byte_offset', state.get('size', 0))
+            last_attempt_time = state.get('last_attempt_time', state.get('timestamp', 0))
+
+            try:
+                byte_offset = max(0, int(byte_offset))
+            except (TypeError, ValueError):
+                byte_offset = 0
+
+            try:
+                last_attempt_time = float(last_attempt_time)
+            except (TypeError, ValueError):
+                last_attempt_time = 0
+
+            sanitized_state[filepath] = {
+                'last_byte_offset': byte_offset,
+                'size': byte_offset,
+                'last_attempt_time': last_attempt_time,
+                'retry_scheduled': False,
+            }
+
+        processed_file_states = sanitized_state
+        log_func(f"백엔드: 처리 상태({PROCESSED_STATE_FILE}) 로드됨 ({len(processed_file_states)}개).")
+    except json.JSONDecodeError:
+        log_func(f"경고: 처리 상태 파일({PROCESSED_STATE_FILE}) 형식이 잘못됨. 빈 상태로 시작합니다.")
+        processed_file_states = {}
+    except Exception as e:
+        log_func(f"경고: 처리 상태 로드 실패 - {e}")
+        processed_file_states = {}
+
+
+def save_processed_state(log_func):
+    """현재 파일 처리 상태를 디스크에 저장합니다."""
+    serializable_state = {}
+
+    for filepath, state in processed_file_states.items():
+        serializable_state[filepath] = {
+            'last_byte_offset': int(state.get('last_byte_offset', state.get('size', 0))),
+            'size': int(state.get('last_byte_offset', state.get('size', 0))),
+            'last_attempt_time': float(state.get('last_attempt_time', state.get('timestamp', 0))),
+        }
+
+    try:
+        os.makedirs(os.path.dirname(PROCESSED_STATE_FILE), exist_ok=True)
+        with open(PROCESSED_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(serializable_state, f, ensure_ascii=False, indent=2)
+        log_func(f"백엔드: 처리 상태 저장 완료 ({PROCESSED_STATE_FILE}).")
+    except Exception as e:
+        log_func(f"오류: 처리 상태 저장 실패 - {e}")
 
 # --- 캐시 관리 함수 (라인 캐시 전용) ---
 def load_line_cache(log_func):
@@ -375,12 +453,14 @@ def process_file(filepath, config, services, log_func):
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
             mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
         if not new_lines:
             backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
             mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
@@ -390,6 +470,7 @@ def process_file(filepath, config, services, log_func):
         if not truly_new_lines: # 추가할 새 라인 없음
             backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
             mark_file_processed(filepath, current_byte_size, current_time)
+            save_processed_state(log_func)
             return
 
         filtered_content = "\n".join(truly_new_lines) # Docs에 추가할 실제 내용
@@ -434,6 +515,7 @@ def process_file(filepath, config, services, log_func):
 
         # --- 5. 최종 상태 업데이트 ---
         mark_file_processed(filepath, current_byte_size, current_time)
+        save_processed_state(log_func)
         log_func(f"처리 완료: {os.path.basename(filepath)}")
         backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
 
@@ -442,6 +524,7 @@ def process_file(filepath, config, services, log_func):
          backend_logger.warning(f"파일 처리 중 사라짐: {filepath}")
          if filepath in processed_file_states: del processed_file_states[filepath] # 상태 정보 제거
          if filepath in file_encodings: del file_encodings[filepath] # 인코딩 정보 제거
+         save_processed_state(log_func)
     except Exception as e:
         log_func(f"오류: {os.path.basename(filepath)} 처리 중 예기치 않은 예외 - {e}")
         backend_logger.error(f"파일 처리 중 예기치 않은 예외: {filepath} - {e}", exc_info=True)
@@ -461,6 +544,8 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
 
     load_line_cache(log_func_threadsafe) # 라인 캐시 로드
     backend_logger.info(f"라인 캐시 로드 완료 - 캐시된 라인 수: {len(added_lines_cache)}")
+    load_processed_state(log_func_threadsafe) # 처리 상태 로드
+    backend_logger.info(f"처리 상태 로드 완료 - 추적 파일 수: {len(processed_file_states)}")
 
     google_services = None
     # Google API 서비스 로드 (Docs만 필수)
@@ -551,5 +636,6 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
         log_func_threadsafe("백엔드: 감시자 종료 완료.")
         backend_logger.info("감시자 종료 완료")
         save_line_cache(log_func_threadsafe) # 최종 라인 캐시 저장
+        save_processed_state(log_func_threadsafe) # 최종 처리 상태 저장
         log_func_threadsafe("백엔드: 모든 작업 완료.")
         backend_logger.info("모든 작업 완료")
