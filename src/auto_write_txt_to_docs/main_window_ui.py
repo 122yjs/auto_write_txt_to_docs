@@ -367,6 +367,20 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     )
     open_docs_button.pack(side="left", padx=(10, 0))
 
+    log_popup_button = ctk.CTkButton(
+        row,
+        text="로그 팝업",
+        command=callbacks["show_log_popup"],
+        width=102,
+        height=40,
+        corner_radius=12,
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    log_popup_button.pack(side="left", padx=(10, 0))
+
     ctk.CTkFrame(row, fg_color="transparent").pack(side="left", fill="x", expand=True)
 
     ctk.CTkButton(
@@ -409,6 +423,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         "start_button": start_button,
         "stop_button": stop_button,
         "open_docs_button": open_docs_button,
+        "log_popup_button": log_popup_button,
     }
 
 
@@ -433,6 +448,13 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
         text="실행 결과와 오류를 여기서 바로 확인합니다.",
         font=_font(ctk, 12, family=font_family),
         text_color=("gray40", "gray72"),
+    ).pack(anchor="w", pady=(4, 0))
+
+    ctk.CTkLabel(
+        header_title,
+        text="기본 창이 좁으면 '로그 팝업' 버튼으로 별도 창에서 볼 수 있습니다.",
+        font=_font(ctk, 11, family=font_family),
+        text_color=("gray45", "gray68"),
     ).pack(anchor="w", pady=(4, 0))
 
     log_folder_button = ctk.CTkButton(
@@ -478,7 +500,7 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
         log_card,
         state="disabled",
         wrap="word",
-        height=180,
+        height=210,
         font=_font(ctk, 12, family=font_family),
         corner_radius=12,
     )
@@ -489,6 +511,60 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
         "log_search_button": log_search_button,
         "log_clear_button": log_clear_button,
         "log_text": log_text,
+    }
+
+
+def _build_result_panel(ctk, parent, callbacks, font_family):
+    """최근 추출 결과 미리보기 패널을 생성한다."""
+    result_card = ctk.CTkFrame(parent, corner_radius=14)
+    result_card.pack(fill="both", expand=False, pady=(0, 14))
+
+    header_frame = ctk.CTkFrame(result_card, fg_color="transparent")
+    header_frame.pack(fill="x", padx=18, pady=(16, 8))
+
+    title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+    title_frame.pack(side="left", fill="x", expand=True)
+
+    ctk.CTkLabel(
+        title_frame,
+        text="최근 추출 결과",
+        font=_font(ctk, 16, "bold", family=font_family),
+    ).pack(anchor="w")
+    ctk.CTkLabel(
+        title_frame,
+        text="로그 파일을 열지 않아도 최근 추출 내용을 바로 확인할 수 있습니다.",
+        font=_font(ctk, 12, family=font_family),
+        text_color=("gray40", "gray72"),
+    ).pack(anchor="w", pady=(4, 0))
+
+    result_clear_button = ctk.CTkButton(
+        header_frame,
+        text="미리보기 지우기",
+        width=112,
+        height=34,
+        corner_radius=10,
+        command=callbacks["clear_extraction_preview"],
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    result_clear_button.pack(side="right")
+
+    result_preview_text = ctk.CTkTextbox(
+        result_card,
+        state="disabled",
+        wrap="word",
+        width=320,
+        height=92,
+        font=_font(ctk, 12, family=font_family),
+        corner_radius=12,
+    )
+    result_preview_text.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+
+    return {
+        "result_preview_text": result_preview_text,
+        "result_clear_button": result_clear_button,
     }
 
 
@@ -503,6 +579,18 @@ def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_fa
     widget_refs.update(_build_status_panel(ctk, main_frame, state_vars, callbacks, font_family))
     widget_refs.update(_build_settings_panel(ctk, main_frame, state_vars, callbacks, font_family))
     widget_refs.update(_build_control_panel(ctk, main_frame, callbacks, font_family))
-    widget_refs.update(_build_log_panel(ctk, main_frame, callbacks, font_family))
+
+    workspace_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+    workspace_frame.pack(fill="both", expand=True)
+
+    result_column = ctk.CTkFrame(workspace_frame, fg_color="transparent")
+    result_column.pack(side="left", fill="both", expand=False, padx=(0, 14))
+
+    log_column = ctk.CTkFrame(workspace_frame, fg_color="transparent")
+    log_column.pack(side="left", fill="both", expand=True)
+
+    widget_refs.update(_build_result_panel(ctk, result_column, callbacks, font_family))
+    widget_refs.update(_build_log_panel(ctk, log_column, callbacks, font_family))
     widget_refs["main_frame"] = main_frame
+    widget_refs["workspace_frame"] = workspace_frame
     return widget_refs

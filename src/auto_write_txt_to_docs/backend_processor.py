@@ -78,6 +78,31 @@ LINE_CACHE_FILE = CACHE_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
 
+def build_extraction_record(filepath, extracted_lines, extracted_at=None):
+    """Google Docs 기록 문자열과 GUI 미리보기용 메타데이터를 생성합니다."""
+    extracted_datetime = extracted_at or datetime.now()
+    extracted_time_text = extracted_datetime.strftime('%Y-%m-%d %H:%M:%S')
+    file_title = os.path.basename(filepath)
+    preview_lines = extracted_lines[:3]
+    preview_text = "\n".join(preview_lines)
+
+    header = (
+        f"\n{'#' * 60}\n"
+        f"# 본래 파일 제목: {file_title}\n"
+        f"# 추출된 시간: {extracted_time_text}\n"
+        f"{'#' * 60}\n"
+    )
+
+    return {
+        'file_title': file_title,
+        'extracted_time': extracted_time_text,
+        'line_count': len(extracted_lines),
+        'preview_text': preview_text,
+        'full_text': "\n".join(extracted_lines),
+        'document_text': header + "\n".join(extracted_lines) + "\n\n",
+    }
+
+
 def get_file_state(filepath):
     """파일별 처리 상태 딕셔너리를 반환합니다."""
     return processed_file_states.setdefault(filepath, {})
@@ -461,7 +486,7 @@ class FileEventHandler(FileSystemEventHandler):
     def on_modified(self, event): self.process(event)
 
 # --- 핵심 파일 처리 함수 (Docs 기록 버전) ---
-def process_file(filepath, config, services, log_func):
+def process_file(filepath, config, services, log_func, extracted_result_callback=None):
     """ 감지된 파일을 읽고, 중복 제거 후 Google Docs에 기록 """
     # 백엔드 로거 가져오기
     backend_logger = logging.getLogger('backend_processor')
@@ -539,10 +564,8 @@ def process_file(filepath, config, services, log_func):
             schedule_retry(filepath, log_func, "Google Docs 서비스가 준비되지 않았습니다", current_time)
             return
 
-        timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
-        # 강조된 헤더 준비
-        header = (f"\n{'#' * 60}\n# 새 업데이트: {timestamp_str}\n{'#' * 60}\n")
-        text_to_insert = header + filtered_content + "\n\n" # 헤더 + 내용 + 공백
+        extraction_record = build_extraction_record(filepath, truly_new_lines)
+        text_to_insert = extraction_record['document_text']
 
         log_func(f"  - Google Docs에 {len(truly_new_lines)}줄 추가 시도 (ID: {docs_id})...")
         try:
@@ -568,6 +591,12 @@ def process_file(filepath, config, services, log_func):
         remember_global_lines(new_lines)
         remember_file_lines(filepath, new_lines)
 
+        if extracted_result_callback:
+            try:
+                extracted_result_callback(extraction_record)
+            except Exception as callback_error:
+                backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
+
         # --- 5. 최종 상태 업데이트 ---
         mark_file_processed(filepath, current_byte_size, current_time)
         save_processed_state(log_func)
@@ -587,7 +616,7 @@ def process_file(filepath, config, services, log_func):
 
 
 # --- 메인 모니터링 함수 ---
-def run_monitoring(config, log_func_threadsafe, stop_event):
+def run_monitoring(config, log_func_threadsafe, stop_event, extracted_result_callback=None):
     """ 백그라운드에서 폴더 감시 및 파일 처리를 실행하는 메인 루프 """
     watch_folder = config.get('watch_folder')
     
@@ -666,7 +695,13 @@ def run_monitoring(config, log_func_threadsafe, stop_event):
                 filepath = file_queue.get_nowait()
                 # 파일 처리 함수 호출
                 backend_logger.info(f"파일 처리 시작: {os.path.basename(filepath)}")
-                process_file(filepath, config, google_services, log_func_threadsafe)
+                process_file(
+                    filepath,
+                    config,
+                    google_services,
+                    log_func_threadsafe,
+                    extracted_result_callback=extracted_result_callback,
+                )
                 backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
                 file_queue.task_done() # 큐 작업 완료 알림
             except queue.Empty:

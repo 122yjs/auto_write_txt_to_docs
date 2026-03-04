@@ -160,6 +160,9 @@ class MessengerDocsApp:
         self.monitoring_thread = None
         self.stop_event = threading.Event()
         self.log_queue = queue.Queue()
+        self.result_queue = queue.Queue()
+        self.log_popup_window = None
+        self.log_popup_text = None
 
         self.tray_icon = None
         self.tray_thread = None
@@ -189,6 +192,7 @@ class MessengerDocsApp:
 
         # --- 로그 큐 처리 ---
         self.root.after(100, self.process_log_queue)
+        self.root.after(100, self.process_result_queue)
         
         # --- 메모리 사용량 모니터링 시작 ---
         self.root.after(1000, self.check_memory_usage)
@@ -775,7 +779,9 @@ class MessengerDocsApp:
                 "show_theme_settings": self.show_theme_settings,
                 "show_backup_restore_dialog": self.show_backup_restore_dialog,
                 "save_config": self.save_config,
+                "clear_extraction_preview": self.clear_extraction_preview,
                 "open_log_folder": lambda: self.open_folder_in_explorer(LOG_DIR_STR),
+                "show_log_popup": self.show_log_popup,
                 "show_log_search_dialog": self.show_log_search_dialog,
                 "clear_log": self.clear_log,
             },
@@ -887,6 +893,109 @@ class MessengerDocsApp:
         foldername = filedialog.askdirectory(title="감시할 폴더 선택")
         if foldername: self.watch_folder.set(foldername); self.log(f"감시 폴더: {foldername}")
     # browse_credentials 함수는 더 이상 필요하지 않습니다 (path_utils에서 자동 관리)
+
+    def close_log_popup(self):
+        """별도 로그 팝업 창을 닫고 참조를 정리한다."""
+        popup_window = self.log_popup_window
+        self.log_popup_text = None
+        self.log_popup_window = None
+
+        if popup_window and popup_window.winfo_exists():
+            popup_window.destroy()
+
+    def sync_log_popup_content(self):
+        """메인 로그 내용을 로그 팝업 창과 동기화한다."""
+        if not (
+            self.log_popup_window
+            and self.log_popup_window.winfo_exists()
+            and self.log_popup_text
+            and self.root.winfo_exists()
+            and hasattr(self, "log_text")
+        ):
+            return
+
+        try:
+            log_content = self.log_text.get("1.0", ctk.END)
+            self.log_popup_text.configure(state='normal')
+            self.log_popup_text.delete("1.0", ctk.END)
+            self.log_popup_text.insert("1.0", log_content)
+            self.log_popup_text.configure(state='disabled')
+            self.log_popup_text.see(ctk.END)
+        except Exception:
+            pass
+
+    def show_log_popup(self):
+        """작업 로그를 별도 창으로 분리해 표시한다."""
+        if self.log_popup_window and self.log_popup_window.winfo_exists():
+            self.log_popup_window.deiconify()
+            self.log_popup_window.lift()
+            self.log_popup_window.focus_force()
+            self.sync_log_popup_content()
+            return
+
+        popup_window = ctk.CTkToplevel(self.root)
+        popup_window.title("작업 로그 팝업")
+        popup_window.geometry("860x560")
+        popup_window.minsize(720, 420)
+        popup_window.transient(self.root)
+        popup_window.protocol("WM_DELETE_WINDOW", self.close_log_popup)
+
+        main_frame = ctk.CTkFrame(popup_window)
+        main_frame.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            main_frame,
+            text="작업 로그",
+            font=ctk.CTkFont(family="Malgun Gothic", size=17, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            main_frame,
+            text="기본 창이 좁을 때도 로그를 넓게 확인할 수 있는 별도 창입니다.",
+            font=ctk.CTkFont(family="Malgun Gothic", size=12),
+            text_color=("gray40", "gray70"),
+        ).pack(anchor="w", pady=(4, 10))
+
+        button_row = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_row.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkButton(
+            button_row,
+            text="로그 지우기",
+            width=98,
+            height=34,
+            corner_radius=10,
+            command=self.clear_log,
+            font=ctk.CTkFont(family="Malgun Gothic", size=12, weight="bold"),
+            fg_color=("gray85", "gray28"),
+            hover_color=("gray78", "gray34"),
+            text_color=("gray20", "gray92"),
+        ).pack(side="right")
+
+        ctk.CTkButton(
+            button_row,
+            text="닫기",
+            width=82,
+            height=34,
+            corner_radius=10,
+            command=self.close_log_popup,
+            font=ctk.CTkFont(family="Malgun Gothic", size=12, weight="bold"),
+        ).pack(side="right", padx=(0, 8))
+
+        self.log_popup_text = ctk.CTkTextbox(
+            main_frame,
+            state="disabled",
+            wrap="word",
+            font=ctk.CTkFont(family="Malgun Gothic", size=12),
+            corner_radius=12,
+        )
+        self.log_popup_text.pack(fill="both", expand=True)
+
+        self.log_popup_window = popup_window
+        self.sync_log_popup_content()
+
+        if center_window:
+            center_window(popup_window)
+
     def log(self, message):
         try:
             # GUI 로그 출력
@@ -900,17 +1009,27 @@ class MessengerDocsApp:
                 self.log_text.insert(ctk.END, message + '\n')
                 self.log_text.configure(state='disabled')
                 self.log_text.see(ctk.END)
+
+                if self.log_popup_window and self.log_popup_window.winfo_exists() and self.log_popup_text:
+                    self.log_popup_text.configure(state='normal')
+                    self.optimize_log_memory(self.log_popup_text)
+                    self.log_popup_text.insert(ctk.END, message + '\n')
+                    self.log_popup_text.configure(state='disabled')
+                    self.log_popup_text.see(ctk.END)
             
             # 파일 로그 출력
             if hasattr(self, 'logger'):
                 self.logger.info(message)
         except Exception: pass
         
-    def optimize_log_memory(self):
+    def optimize_log_memory(self, target_widget=None):
         """로그 텍스트 크기가 너무 커지면 오래된 로그 삭제 (메모리 최적화)"""
         try:
+            if target_widget is None:
+                target_widget = self.log_text
+
             # 현재 로그 텍스트 내용 가져오기
-            log_content = self.log_text.get("1.0", ctk.END)
+            log_content = target_widget.get("1.0", ctk.END)
             lines = log_content.split('\n')
             
             # 로그 라인이 1000줄 이상이면 오래된 로그 삭제
@@ -920,15 +1039,67 @@ class MessengerDocsApp:
                 lines_to_keep = lines[len(lines) - max_lines // 2:]
                 
                 # 로그 텍스트 지우고 유지할 라인만 다시 삽입
-                self.log_text.delete("1.0", ctk.END)
-                self.log_text.insert("1.0", "\n".join(lines_to_keep) + "\n")
+                target_widget.delete("1.0", ctk.END)
+                target_widget.insert("1.0", "\n".join(lines_to_keep) + "\n")
                 
                 # 메모리 최적화 메시지 추가
-                self.log_text.insert("1.0", "--- 오래된 로그 항목이 메모리에서 정리되었습니다 ---\n\n")
+                target_widget.insert("1.0", "--- 오래된 로그 항목이 메모리에서 정리되었습니다 ---\n\n")
         except Exception as e:
             # 오류 발생 시 조용히 무시 (로깅 시스템 자체에서 오류가 발생하므로 로그 출력 안 함)
             print(f"로그 메모리 최적화 오류: {e}")
     def log_threadsafe(self, message): self.log_queue.put(message)
+    def extracted_result_threadsafe(self, result_payload): self.result_queue.put(result_payload)
+
+    def clear_extraction_preview(self):
+        """최근 추출 결과 미리보기를 초기화합니다."""
+        if hasattr(self, "result_preview_text") and self.root.winfo_exists():
+            try:
+                self.result_preview_text.configure(state='normal')
+                self.result_preview_text.delete("1.0", ctk.END)
+                self.result_preview_text.configure(state='disabled')
+            except Exception:
+                pass
+
+    def append_extraction_preview(self, result_payload):
+        """최근 추출 결과를 GUI 미리보기 패널에 표시합니다."""
+        if not hasattr(self, "result_preview_text") or not self.root.winfo_exists():
+            return
+
+        file_title = result_payload.get("file_title", "이름 없는 파일")
+        extracted_time = result_payload.get("extracted_time", "시간 정보 없음")
+        line_count = int(result_payload.get("line_count", 0))
+        preview_text = result_payload.get("preview_text", "").strip()
+        preview_line_count = len([line for line in preview_text.splitlines() if line.strip()])
+        remaining_lines = max(0, line_count - preview_line_count)
+
+        preview_block = (
+            f"[본래 파일 제목] {file_title}\n"
+            f"[추출된 시간] {extracted_time}\n"
+            f"[추출 줄 수] {line_count}줄\n"
+        )
+        if preview_text:
+            preview_block += f"{preview_text}\n"
+        if remaining_lines > 0:
+            preview_block += f"... 외 {remaining_lines}줄\n"
+        preview_block += f"{'-' * 44}\n"
+
+        try:
+            self.result_preview_text.configure(state='normal')
+            existing_text = self.result_preview_text.get("1.0", ctk.END).strip()
+            new_text = preview_block if not existing_text else preview_block + existing_text + "\n"
+            self.result_preview_text.delete("1.0", ctk.END)
+            self.result_preview_text.insert("1.0", new_text)
+
+            lines = self.result_preview_text.get("1.0", ctk.END).splitlines()
+            if len(lines) > 28:
+                self.result_preview_text.delete("1.0", ctk.END)
+                self.result_preview_text.insert("1.0", "\n".join(lines[:28]) + "\n")
+
+            self.result_preview_text.configure(state='disabled')
+            self.result_preview_text.see("1.0")
+        except Exception:
+            pass
+
     def process_log_queue(self):
         try:
             while True:
@@ -995,6 +1166,20 @@ class MessengerDocsApp:
         finally:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_log_queue)
+
+    def process_result_queue(self):
+        """백엔드에서 전달된 추출 결과 미리보기를 처리합니다."""
+        try:
+            while True:
+                result_payload = self.result_queue.get_nowait()
+                self.append_extraction_preview(result_payload)
+        except queue.Empty:
+            pass
+        except Exception:
+            pass
+        finally:
+            if hasattr(self, 'root') and self.root.winfo_exists():
+                self.root.after(100, self.process_result_queue)
     def save_config(self):
         if not save_app_config:
             messagebox.showerror("저장 오류", "설정 저장 모듈을 불러오지 못했습니다.", parent=self.root)
@@ -1111,7 +1296,8 @@ class MessengerDocsApp:
         
         self.monitoring_thread = threading.Thread(
             target=run_monitoring, 
-            args=(current_config, self.log_threadsafe, self.stop_event), 
+            args=(current_config, self.log_threadsafe, self.stop_event),
+            kwargs={"extracted_result_callback": self.extracted_result_threadsafe},
             daemon=True
         )
         self.monitoring_thread.start()
@@ -1219,6 +1405,12 @@ class MessengerDocsApp:
             self.log_text.configure(state='normal')
             self.log_text.delete("1.0", ctk.END)
             self.log_text.configure(state='disabled')
+
+            if self.log_popup_window and self.log_popup_window.winfo_exists() and self.log_popup_text:
+                self.log_popup_text.configure(state='normal')
+                self.log_popup_text.delete("1.0", ctk.END)
+                self.log_popup_text.configure(state='disabled')
+
             self.log("로그 내용을 지웠습니다.")
         except Exception as e:
             messagebox.showerror("오류", f"로그 지우기 실패: {e}", parent=self.root)

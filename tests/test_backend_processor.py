@@ -149,6 +149,21 @@ class BackendProcessorTests(unittest.TestCase):
             ["셋줄", "둘줄", "넷줄"],
         )
 
+    def test_build_extraction_record_includes_file_title_and_extracted_time(self):
+        filepath = os.path.join(self.temp_dir.name, "대화로그.txt")
+
+        record = backend_processor.build_extraction_record(
+            filepath,
+            ["첫 줄", "둘째 줄", "셋째 줄", "넷째 줄"],
+            extracted_at=backend_processor.datetime(2026, 3, 5, 9, 30, 15),
+        )
+
+        self.assertEqual(record["file_title"], "대화로그.txt")
+        self.assertEqual(record["extracted_time"], "2026-03-05 09:30:15")
+        self.assertIn("본래 파일 제목: 대화로그.txt", record["document_text"])
+        self.assertIn("추출된 시간: 2026-03-05 09:30:15", record["document_text"])
+        self.assertEqual(record["preview_text"], "첫 줄\n둘째 줄\n셋째 줄")
+
     def test_missing_docs_service_keeps_size_and_schedules_retry(self):
         filepath = self.create_temp_file("새 데이터 한 줄\n")
         logs = []
@@ -193,12 +208,14 @@ class BackendProcessorTests(unittest.TestCase):
         filepath = self.create_temp_file("정상 처리 테스트\n")
         logs = []
         fake_docs_service = FakeDocsService()
+        extracted_results = []
 
         backend_processor.process_file(
             filepath,
             {"docs_id": "doc-3"},
             {"docs": fake_docs_service},
             logs.append,
+            extracted_result_callback=extracted_results.append,
         )
 
         state = backend_processor.processed_file_states[filepath]
@@ -211,6 +228,12 @@ class BackendProcessorTests(unittest.TestCase):
         )
         self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
         self.assertEqual(len(fake_docs_service.calls), 1)
+        inserted_text = fake_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
+        self.assertIn("본래 파일 제목:", inserted_text)
+        self.assertIn("추출된 시간:", inserted_text)
+        self.assertEqual(len(extracted_results), 1)
+        self.assertEqual(extracted_results[0]["file_title"], os.path.basename(filepath))
+        self.assertIn("정상 처리 테스트", extracted_results[0]["full_text"])
         self.assertTrue(any("처리 완료" in message for message in logs))
 
     def test_save_and_load_processed_state_persists_last_byte_offset(self):
