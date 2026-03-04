@@ -29,18 +29,20 @@ except ImportError:
     messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
     run_monitoring = None # 함수 부재 처리
 
-# path_utils 임포트 (인증 파일 경로 확인용)
+# path_utils 임포트 (공통 경로 정책 사용)
 try:
-    from src.auto_write_txt_to_docs.path_utils import BUNDLED_CREDENTIALS_FILE_STR
+    from src.auto_write_txt_to_docs.path_utils import (
+        BUNDLED_CREDENTIALS_FILE_STR,
+        CONFIG_FILE_STR,
+        LEGACY_CONFIG_FILE_STR,
+        LOG_DIR_STR,
+    )
 except ImportError:
     messagebox.showerror("모듈 오류", "경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
     BUNDLED_CREDENTIALS_FILE_STR = None
-
-# --- 기본 설정 ---
-# 현재 파일(main_gui.py)의 디렉토리 -> 프로젝트 루트
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
-# ICON_PATH = "icon.png" # 더 이상 필요 없음
+    CONFIG_FILE_STR = "config.json"
+    LEGACY_CONFIG_FILE_STR = "config.json"
+    LOG_DIR_STR = "logs"
 
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
@@ -223,10 +225,8 @@ class MessengerDocsApp:
     def setup_logging(self):
         """로깅 시스템 설정"""
         try:
-            # logs 폴더 생성 (절대 경로 사용)
-            # PROJECT_ROOT는 파일 상단에 정의되어 있음
-            current_dir = PROJECT_ROOT # 프로젝트 루트를 기준으로 logs 폴더 생성
-            log_dir = os.path.join(current_dir, "logs")
+            # 공통 경로 정책(path_utils)의 로그 디렉토리 사용
+            log_dir = LOG_DIR_STR
             if not os.path.exists(log_dir):
                 os.makedirs(log_dir)
                 print(f"로그 디렉토리 생성: {log_dir}")
@@ -546,7 +546,7 @@ class MessengerDocsApp:
             log_header_frame,
             text="로그 폴더 열기",
             width=100,
-            command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs"))
+            command=lambda: self.open_folder_in_explorer(LOG_DIR_STR)
         )
         self.log_folder_button.pack(side="right", padx=(5,0)) # 오른쪽 정렬
         
@@ -803,14 +803,19 @@ class MessengerDocsApp:
             "appearance_mode": self.appearance_mode.get()
         }
         try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
+            with open(CONFIG_FILE_STR, 'w', encoding='utf-8') as f: json.dump(config_data, f, indent=4, ensure_ascii=False)
             self.log("설정 저장 완료.")
             self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
+        config_path = CONFIG_FILE_STR
+        if not os.path.exists(config_path) and LEGACY_CONFIG_FILE_STR != CONFIG_FILE_STR and os.path.exists(LEGACY_CONFIG_FILE_STR):
+            config_path = LEGACY_CONFIG_FILE_STR
+            self.log(f"레거시 설정 파일을 불러옵니다: {config_path}")
+
+        if os.path.exists(config_path):
             try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f: config_data = json.load(f)
+                with open(config_path, 'r', encoding='utf-8') as f: config_data = json.load(f)
                 self.watch_folder.set(config_data.get("watch_folder", ""))
                 self.docs_input.set(config_data.get("docs_input", ""))
                 self.show_help_on_startup.set(config_data.get("show_help_on_startup", True))
@@ -1144,7 +1149,7 @@ class MessengerDocsApp:
         log_button = ctk.CTkButton(
             button_frame,
             text="로그 폴더 열기",
-            command=lambda: self.open_folder_in_explorer(os.path.join(PROJECT_ROOT, "logs")),
+            command=lambda: self.open_folder_in_explorer(LOG_DIR_STR),
             width=120
         )
         log_button.pack(side="left", padx=10)

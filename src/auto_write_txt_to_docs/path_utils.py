@@ -80,23 +80,29 @@ def get_bundled_credentials_path(filename="developer_credentials.json"):
         # 실행 파일(exe)로 실행 중인 경우:
         # PyInstaller 로 포장할 때 assets 폴더를 포함시켰다고 가정합니다.
         # 예: PyInstaller 실행 시 --add-data "src/auto_write_txt_to_docs/assets:assets" 옵션 사용
-        print("실행 파일 환경: 번들된 인증서 경로 탐색")
+        logging.getLogger(__name__).debug("실행 파일 환경: 번들된 인증서 경로 탐색")
         base_path = Path(sys._MEIPASS)
         return base_path / "assets" / filename
     else:
         # 개발 환경 (.py 파일을 직접 실행하는 경우):
         # 프로젝트 루트/src/auto_write_txt_to_docs/assets/developer_credentials.json 주소를 찾습니다.
-        print("개발 환경: 소스코드 기준 인증서 경로 탐색")
+        logging.getLogger(__name__).debug("개발 환경: 소스코드 기준 인증서 경로 탐색")
         base_path = get_project_root()
         return base_path / "src" / "auto_write_txt_to_docs" / "assets" / filename
 
 
-# --- 기존 코드 (환경 변수 및 기본 설정) 유지 ---
+# --- 기본 경로 상수 ---
 PROJECT_ROOT = get_project_root()
+
+# 현재 사용 경로
 CONFIG_FILE = get_safe_config_path("config.json", use_user_dir=True)  # 설정 파일은 사용자 폴더에
-CACHE_FILE = get_safe_cache_path("line_cache.json", use_user_dir=True)  # 캐시 파일도 사용자 폴더에
-PROCESSED_STATE_FILE = get_safe_cache_path("processed_state.json", use_user_dir=True)  # 처리 상태도 사용자 폴더에
-LOG_DIR = PROJECT_ROOT / "logs"  # 로그는 프로그램 폴더에 (또는 사용자 폴더로 변경 가능)
+CACHE_FILE = get_safe_cache_path("added_lines_cache.json", use_user_dir=True)  # 라인 캐시 파일
+PROCESSED_STATE_FILE = get_safe_cache_path("processed_state.json", use_user_dir=True)  # 처리 상태 파일
+LOG_DIR = PROJECT_ROOT / "logs"  # 로그는 현재 프로젝트 logs 폴더 사용
+
+# 레거시 경로 (이전 버전 호환용)
+LEGACY_CONFIG_FILE = PROJECT_ROOT / "config.json"
+LEGACY_CACHE_FILE = PROJECT_ROOT / "added_lines_cache.json"
 
 # 다른 파일에서 쉽게 쓰기 위해 문자열(str) 버전도 만듦
 PROJECT_ROOT_STR = str(PROJECT_ROOT)
@@ -104,6 +110,8 @@ CONFIG_FILE_STR = str(CONFIG_FILE)
 CACHE_FILE_STR = str(CACHE_FILE)
 PROCESSED_STATE_FILE_STR = str(PROCESSED_STATE_FILE)
 LOG_DIR_STR = str(LOG_DIR)
+LEGACY_CONFIG_FILE_STR = str(LEGACY_CONFIG_FILE)
+LEGACY_CACHE_FILE_STR = str(LEGACY_CACHE_FILE)
 
 # ⭐⭐⭐ 아래 코드 추가 ⭐⭐⭐
 # 프로그램 신분증 파일의 최종 주소 (문자열 버전)

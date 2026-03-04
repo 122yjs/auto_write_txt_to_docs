@@ -19,11 +19,20 @@ except ImportError:
     print("오류: google_auth.py 모듈을 찾을 수 없습니다. Google API 인증 기능이 작동하지 않습니다.")
     get_google_services = None
 
+try:
+    from .path_utils import CACHE_FILE_STR, LEGACY_CACHE_FILE_STR, LOG_DIR_STR
+except ImportError:
+    project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
+    LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
+    LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
+
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
 processed_file_states = {} # 파일별 마지막 처리 상태 (크기, 시간) - 메모리 기반
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
+RETRY_DELAY = 5.0
 
 # 로깅 설정
 def setup_backend_logging():
@@ -35,12 +44,8 @@ def setup_backend_logging():
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
-    # logs 폴더 생성 (없는 경우)
-    # PROJECT_ROOT는 파일 하단에 정의되어 있음 (CACHE_FILE 설정 시)
-    # 해당 정의를 이곳에서도 활용하거나, 여기서 다시 정의할 수 있습니다.
-    # 간결성을 위해 여기서 PROJECT_ROOT를 다시 정의합니다.
-    project_root_for_log = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    logs_dir = os.path.join(project_root_for_log, 'logs')
+    # 공통 경로 정책(path_utils)의 로그 디렉토리 사용
+    logs_dir = LOG_DIR_STR
     os.makedirs(logs_dir, exist_ok=True)
     
     # 파일 핸들러 설정
@@ -60,31 +65,95 @@ def setup_backend_logging():
 
 # 라인 캐시 관련 설정
 added_lines_cache = set() # Docs에 추가된 라인 저장 (중복 방지)
-# 현재 파일(backend_processor.py)의 디렉토리 -> src/auto_write_txt_to_docs
-# src/auto_write_txt_to_docs의 부모의 부모 디렉토리 -> 프로젝트 루트
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CACHE_FILE = os.path.join(PROJECT_ROOT, "added_lines_cache.json") # 라인 캐시 파일명
+LINE_CACHE_FILE = CACHE_FILE_STR
+
+
+def get_file_state(filepath):
+    """파일별 처리 상태 딕셔너리를 반환합니다."""
+    return processed_file_states.setdefault(filepath, {})
+
+
+def get_last_attempt_time(filepath):
+    """최근 처리 시도 시간을 반환합니다. (레거시 timestamp 키도 호환)"""
+    state = processed_file_states.get(filepath, {})
+    return state.get('last_attempt_time', state.get('timestamp', 0))
+
+
+def mark_processing_attempt(filepath, current_time):
+    """처리 시도 시각만 갱신합니다."""
+    state = get_file_state(filepath)
+    state['last_attempt_time'] = current_time
+    if 'timestamp' in state:
+        del state['timestamp']
+
+
+def mark_file_processed(filepath, current_size, current_time):
+    """파일이 안전하게 처리된 후 상태를 확정합니다."""
+    state = get_file_state(filepath)
+    state['size'] = current_size
+    state['last_attempt_time'] = current_time
+    state['retry_scheduled'] = False
+    if 'timestamp' in state:
+        del state['timestamp']
+
+
+def schedule_retry(filepath, log_func, reason, current_time=None):
+    """Google Docs 반영 실패 시 같은 파일을 다시 큐에 넣습니다."""
+    backend_logger = logging.getLogger('backend_processor')
+    if current_time is None:
+        current_time = time.time()
+
+    state = get_file_state(filepath)
+    state['last_attempt_time'] = current_time
+    if 'timestamp' in state:
+        del state['timestamp']
+
+    if state.get('retry_scheduled'):
+        backend_logger.debug(f"이미 재시도 예약됨: {filepath}")
+        return
+
+    state['retry_scheduled'] = True
+    log_func(f"  - Google Docs 기록 보류: {reason}. {int(RETRY_DELAY)}초 후 재시도합니다.")
+    backend_logger.warning(f"Google Docs 기록 보류 - 재시도 예약: {filepath} / 사유: {reason}")
+
+    def requeue_file():
+        retry_state = processed_file_states.get(filepath)
+        if not retry_state:
+            return
+        if not retry_state.pop('retry_scheduled', False):
+            return
+        file_queue.put(filepath)
+        backend_logger.info(f"재시도 큐 등록 완료: {filepath}")
+
+    retry_timer = threading.Timer(RETRY_DELAY, requeue_file)
+    retry_timer.daemon = True
+    retry_timer.start()
 
 # --- 캐시 관리 함수 (라인 캐시 전용) ---
 def load_line_cache(log_func):
     """ 프로그램 시작 시 라인 캐시 파일을 로드합니다. """
     global added_lines_cache
-    if os.path.exists(CACHE_FILE):
+    cache_path = LINE_CACHE_FILE
+    if not os.path.exists(cache_path) and LEGACY_CACHE_FILE_STR != LINE_CACHE_FILE and os.path.exists(LEGACY_CACHE_FILE_STR):
+        cache_path = LEGACY_CACHE_FILE_STR
+        log_func(f"백엔드: 레거시 라인 캐시를 불러옵니다 ({cache_path}).")
+
+    if os.path.exists(cache_path):
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(cache_path, 'r', encoding='utf-8') as f:
                 added_lines_cache = set(json.load(f))
-            log_func(f"백엔드: 라인 캐시({CACHE_FILE}) 로드됨 ({len(added_lines_cache)}개).")
+            log_func(f"백엔드: 라인 캐시({cache_path}) 로드됨 ({len(added_lines_cache)}개).")
             
             # 캐시 크기 제한 (메모리 최적화)
             optimize_cache_size(log_func)
         except json.JSONDecodeError:
-            log_func(f"경고: 라인 캐시 파일({CACHE_FILE}) 형식이 잘못됨. 빈 캐시로 시작.")
+            log_func(f"경고: 라인 캐시 파일({cache_path}) 형식이 잘못됨. 빈 캐시로 시작.")
             added_lines_cache = set()
         except Exception as e:
             log_func(f"경고: 라인 캐시 로드 실패 - {e}")
             added_lines_cache = set()
     else:
-        log_func(f"백엔드: 라인 캐시 파일({CACHE_FILE}) 없음. 새로 시작합니다.")
+        log_func(f"백엔드: 라인 캐시 파일({LINE_CACHE_FILE}) 없음. 새로 시작합니다.")
         added_lines_cache = set()
 
 def optimize_cache_size(log_func):
@@ -107,7 +176,7 @@ def optimize_cache_size(log_func):
         
         # 최적화된 캐시 즉시 저장
         try:
-            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(list(added_lines_cache), f, ensure_ascii=False)
             log_func("백엔드: 최적화된 라인 캐시 저장 완료")
         except Exception as e:
@@ -118,10 +187,10 @@ def save_line_cache(log_func):
     global added_lines_cache
     log_func(f"백엔드: 라인 캐시 저장 시도 ({len(added_lines_cache)}개)...")
     try:
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
             # Set은 JSON 직렬화 안되므로 List로 변환
             json.dump(list(added_lines_cache), f, ensure_ascii=False, indent=4)
-        log_func(f"백엔드: 라인 캐시 저장 완료 ({CACHE_FILE}).")
+        log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
 
