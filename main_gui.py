@@ -29,6 +29,18 @@ except ImportError:
     messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
     run_monitoring = None # 함수 부재 처리
 
+try:
+    from src.auto_write_txt_to_docs.google_auth import (
+        create_google_document,
+        get_google_services,
+        list_accessible_google_documents,
+    )
+except ImportError:
+    messagebox.showerror("모듈 오류", "Google 인증 모듈(google_auth.py)을 찾을 수 없습니다.")
+    create_google_document = None
+    get_google_services = None
+    list_accessible_google_documents = None
+
 # path_utils 임포트 (공통 경로 정책 사용)
 try:
     from src.auto_write_txt_to_docs.path_utils import (
@@ -77,6 +89,19 @@ def extract_google_id_from_url(url_or_id):
     if not url_or_id or not isinstance(url_or_id, str): return url_or_id
     match_docs = re.search(r'/document/d/([a-zA-Z0-9-_]+)', url_or_id)
     return match_docs.group(1) if match_docs else url_or_id
+
+
+def format_google_modified_time(modified_time_text):
+    """Google Drive 수정 시각 문자열을 사용자에게 읽기 쉬운 형식으로 변환한다."""
+    if not modified_time_text:
+        return "수정 시각 정보 없음"
+
+    try:
+        normalized_text = modified_time_text.replace("Z", "+00:00")
+        parsed_time = datetime.fromisoformat(normalized_text)
+        return parsed_time.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return modified_time_text
 
 class MessengerDocsApp:
     def __init__(self, root):
@@ -344,7 +369,7 @@ class MessengerDocsApp:
         
         # Google Docs URL/ID 검사
         if not docs_input_val:
-            errors.append("Google Docs URL 또는 ID를 입력해주세요.")
+            errors.append("Google Docs URL/ID를 입력하거나 '새 문서 만들기' 또는 '문서 목록'으로 문서를 지정해주세요.")
         else:
             docs_id = extract_google_id_from_url(docs_input_val)
             if not docs_id:
@@ -412,6 +437,190 @@ class MessengerDocsApp:
         except Exception as e:
             self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
             messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
+
+    def focus_existing_docs_input(self):
+        """기존 Google Docs URL/ID를 직접 입력할 수 있도록 입력칸에 포커스를 준다."""
+        if hasattr(self, "docs_input_entry"):
+            self.docs_input_entry.focus_set()
+            self.docs_input_entry.icursor(ctk.END)
+        self.log("기존 Google Docs 주소/ID 직접 입력 모드.")
+
+    def get_google_services_for_ui(self):
+        """GUI에서 문서 생성/선택에 사용할 Google 서비스 객체를 준비한다."""
+        if not get_google_services:
+            messagebox.showerror("모듈 오류", "Google 인증 모듈을 불러오지 못했습니다.", parent=self.root)
+            return None
+
+        self.log("Google Docs/Drive 서비스 연결 확인 중...")
+        services = get_google_services(self.log)
+        if not services:
+            messagebox.showerror(
+                "Google 연결 오류",
+                "Google 인증 또는 서비스 초기화에 실패했습니다.\n로그를 확인한 뒤 다시 시도하세요.",
+                parent=self.root
+            )
+            return None
+
+        if 'docs' not in services or 'drive' not in services:
+            messagebox.showerror(
+                "Google 연결 오류",
+                "문서 생성/선택에 필요한 Google Docs 또는 Drive 서비스가 준비되지 않았습니다.",
+                parent=self.root
+            )
+            return None
+
+        return services
+
+    def create_new_google_doc(self):
+        """현재 권한 범위에서 새 Google Docs 문서를 만들고 자동으로 선택한다."""
+        if not create_google_document:
+            messagebox.showerror("모듈 오류", "문서 생성 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        title_dialog = ctk.CTkInputDialog(
+            text="새 Google Docs 문서 제목을 입력하세요.\n비워두면 자동 제목을 사용합니다.",
+            title="새 Google Docs 문서 만들기"
+        )
+        document_title = title_dialog.get_input()
+        if document_title is None:
+            return
+
+        services = self.get_google_services_for_ui()
+        if not services:
+            return
+
+        created_document = create_google_document(self.log, document_title, services=services)
+        if not created_document:
+            messagebox.showerror("문서 생성 실패", "새 Google Docs 문서를 만들지 못했습니다.\n로그를 확인하세요.", parent=self.root)
+            return
+
+        document_id = created_document.get("id", "")
+        document_name = created_document.get("name", "새 Google Docs 문서")
+        self.docs_input.set(document_id)
+        self.log(f"새 문서를 현재 대상 문서로 설정했습니다: {document_name} ({document_id})")
+
+        open_created_document = messagebox.askyesno(
+            "문서 생성 완료",
+            f"새 문서가 생성되었습니다.\n\n제목: {document_name}\n문서 ID: {document_id}\n\n지금 브라우저에서 열까요?",
+            parent=self.root
+        )
+        if open_created_document and created_document.get("webViewLink"):
+            webbrowser.open(created_document["webViewLink"])
+
+    def select_google_doc(self):
+        """현재 권한(drive.file)에서 접근 가능한 Google Docs 문서 목록을 표시한다."""
+        if not list_accessible_google_documents:
+            messagebox.showerror("모듈 오류", "문서 목록 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        services = self.get_google_services_for_ui()
+        if not services:
+            return
+
+        documents = list_accessible_google_documents(self.log, services=services, page_size=20)
+        if documents is None:
+            messagebox.showerror("문서 목록 오류", "Google Docs 문서 목록을 불러오지 못했습니다.\n로그를 확인하세요.", parent=self.root)
+            return
+
+        if not documents:
+            messagebox.showinfo(
+                "표시할 문서 없음",
+                "현재 권한(drive.file) 기준으로 이 앱이 접근 가능한 Google Docs 문서가 없습니다.\n"
+                "먼저 '새 문서 만들기'로 문서를 생성하면 이 목록에 표시됩니다.",
+                parent=self.root
+            )
+            return
+
+        selector_window = ctk.CTkToplevel(self.root)
+        selector_window.title("Google Docs 문서 목록")
+        selector_window.geometry("760x520")
+        selector_window.minsize(760, 520)
+        selector_window.transient(self.root)
+        selector_window.grab_set()
+
+        main_frame = ctk.CTkFrame(selector_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            main_frame,
+            text="Google Docs 문서 목록",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkLabel(
+            main_frame,
+            text=(
+                "현재 권한(drive.file) 기준으로 이 앱이 만들었거나 이 앱이 이미 접근 가능한 문서만 표시됩니다.\n"
+                "기존 Drive 전체 문서는 모두 보이지 않을 수 있습니다."
+            ),
+            justify="left",
+            wraplength=700
+        ).pack(anchor="w", fill="x", pady=(0, 12))
+
+        list_frame = ctk.CTkScrollableFrame(main_frame)
+        list_frame.pack(fill="both", expand=True)
+
+        def choose_document(document_info):
+            document_id = document_info.get("id", "")
+            document_name = document_info.get("name", "이름 없는 문서")
+            self.docs_input.set(document_id)
+            self.log(f"문서 목록에서 선택 완료: {document_name} ({document_id})")
+            selector_window.destroy()
+
+        for document_info in documents:
+            row_frame = ctk.CTkFrame(list_frame)
+            row_frame.pack(fill="x", padx=4, pady=4)
+
+            info_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+            info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+
+            document_name = document_info.get("name", "이름 없는 문서")
+            modified_time = format_google_modified_time(document_info.get("modifiedTime"))
+            ctk.CTkLabel(
+                info_frame,
+                text=document_name,
+                font=ctk.CTkFont(weight="bold"),
+                anchor="w",
+                justify="left"
+            ).pack(anchor="w", fill="x")
+            ctk.CTkLabel(
+                info_frame,
+                text=f"최근 수정: {modified_time}\n문서 ID: {document_info.get('id', '')}",
+                justify="left",
+                anchor="w"
+            ).pack(anchor="w", fill="x", pady=(2, 0))
+
+            ctk.CTkButton(
+                row_frame,
+                text="선택",
+                width=70,
+                command=lambda doc=document_info: choose_document(doc)
+            ).pack(side="right", padx=(6, 10), pady=10)
+
+            if document_info.get("webViewLink"):
+                ctk.CTkButton(
+                    row_frame,
+                    text="열기",
+                    width=70,
+                    command=lambda url=document_info["webViewLink"]: webbrowser.open(url)
+                ).pack(side="right", padx=6, pady=10)
+
+        ctk.CTkButton(
+            main_frame,
+            text="닫기",
+            width=100,
+            command=selector_window.destroy
+        ).pack(anchor="e", pady=(12, 0))
+
+        if center_window:
+            center_window(selector_window)
+        else:
+            selector_window.update_idletasks()
+            width = selector_window.winfo_width()
+            height = selector_window.winfo_height()
+            x = (selector_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (selector_window.winfo_screenheight() // 2) - (height // 2)
+            selector_window.geometry(f"{width}x{height}+{x}+{y}")
     
     def update_status(self, status_text, detail_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
@@ -503,21 +712,37 @@ class MessengerDocsApp:
         
         # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
         
-        # Google Docs URL/ID 설정
-        docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
-        ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
-        ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
-        
-        # 웹에서 열기 버튼 (아이콘 추가 및 스타일 개선)
-        docs_button = ctk.CTkButton(
-            docs_frame, 
-            text="문서 열기", 
-            width=80, 
-            command=self.open_docs_in_browser,
-            fg_color="#4285F4",  # Google 파란색
-            hover_color="#3367D6"  # 어두운 파란색
-        )
-        docs_button.pack(side="left", padx=(5,0))
+        # Google Docs 대상 문서 설정
+        docs_action_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_action_frame.pack(fill="x", padx=10, pady=(5,5))
+        ctk.CTkLabel(docs_action_frame, text="문서 지정:", width=120).pack(side="left", padx=(0,5))
+
+        ctk.CTkButton(
+            docs_action_frame,
+            text="새 문서 만들기",
+            width=110,
+            command=self.create_new_google_doc,
+            fg_color="#0F9D58",
+            hover_color="#0B8043"
+        ).pack(side="left", padx=(5,0))
+
+        ctk.CTkButton(
+            docs_action_frame,
+            text="기존 주소 입력",
+            width=110,
+            command=self.focus_existing_docs_input
+        ).pack(side="left", padx=(5,0))
+
+        docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(0,10))
+        ctk.CTkLabel(docs_frame, text="기존 주소/ID:", width=120).pack(side="left", padx=(0,5))
+        self.docs_input_entry = ctk.CTkEntry(docs_frame, textvariable=self.docs_input)
+        self.docs_input_entry.pack(side="left", fill="x", expand=True, padx=5)
+
+        ctk.CTkButton(
+            docs_frame,
+            text="문서 목록",
+            width=90,
+            command=self.select_google_doc
+        ).pack(side="left", padx=(5,0))
         
         # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
@@ -969,8 +1194,8 @@ class MessengerDocsApp:
             for child in settings_frame.winfo_children():
                  if isinstance(child, ctk.CTkFrame):
                       for widget in child.winfo_children():
-                           # "웹에서 열기" 버튼은 항상 활성화 상태로 유지
-                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "웹에서 열기":
+                           # 웹에서 문서를 바로 열어보는 버튼은 감시 중에도 유지
+                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "Docs 웹에서 열기":
                                continue
                            elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
                                widget.configure(state="disabled")
@@ -1020,7 +1245,10 @@ class MessengerDocsApp:
 2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
    - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
    - 문서 ID만 직접 입력할 수 있습니다.
-   - '웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
+   - '새 문서 만들기' 버튼으로 현재 권한 범위에서 새 문서를 만들고 바로 연결할 수 있습니다.
+   - '기존 주소 입력' 버튼을 누르면 기존 주소/ID 입력칸에 바로 입력할 수 있습니다.
+   - '문서 목록' 버튼으로 이 앱이 접근 가능한 문서 목록에서 선택할 수 있습니다.
+   - 'Docs 웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
 
 3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
 

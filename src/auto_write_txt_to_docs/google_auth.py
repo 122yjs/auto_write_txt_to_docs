@@ -96,6 +96,18 @@ def authenticate(log_func):
         try:
             # 파일에서 출입 허가증 정보 로드 (권한 범위 SCOPES도 맞는지 확인)
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+            # [추가] 403 에러 방지: 토큰의 client_id 비교
+            try:
+                import json
+                with open(credentials_path, 'r', encoding='utf-8') as f:
+                    client_config = json.load(f)
+                    expected_client_id = client_config.get('installed', {}).get('client_id') or client_config.get('web', {}).get('client_id')
+                if creds.client_id != expected_client_id:
+                    log_func('경고: 앱 연결 변경됨. 기존 토큰을 폐기합니다.')
+                    auth_logger.warning('토큰 client_id 불일치.')
+                    creds = None
+            except Exception as e:
+                auth_logger.error(f'client_id 검증 실패: {e}')
             log_func("백엔드: 저장된 Google 사용자 인증 정보(토큰) 로드 성공.")
             auth_logger.info("기존 토큰 파일 로드 성공")
         except Exception as e:
@@ -172,13 +184,11 @@ def get_google_services(log_func):
 
     services = {}
     try:
-        log_func("백엔드: Google Docs 서비스 객체 생성 시도...")
-        # Docs 서비스만 생성
+        log_func("백엔드: Google Docs/Drive 서비스 객체 생성 시도...")
         services['docs'] = build('docs', 'v1', credentials=creds)
-        # 필요시 Drive 서비스도 추가 가능
-        # services['drive'] = build('drive', 'v3', credentials=creds)
-        log_func("백엔드: Google Docs 서비스 객체 생성 완료.")
-        auth_logger.info("Google 서비스 객체 생성 완료")
+        services['drive'] = build('drive', 'v3', credentials=creds)
+        log_func("백엔드: Google Docs/Drive 서비스 객체 생성 완료.")
+        auth_logger.info("Google Docs/Drive 서비스 객체 생성 완료")
         return services
     except HttpError as error:
         log_func(f"오류: Google 서비스 객체 생성 중 API 오류 발생 - {error}")
@@ -187,4 +197,70 @@ def get_google_services(log_func):
     except Exception as e:
         log_func(f"오류: Google 서비스 객체 생성 중 예외 발생 - {e}")
         auth_logger.error(f"Google 서비스 객체 생성 중 예외: {e}", exc_info=True)
+        return None
+
+
+def create_google_document(log_func, title, services=None):
+    """현재 권한 범위에서 새 Google Docs 문서를 생성한다."""
+    auth_logger = setup_google_auth_logging()
+    google_services = services or get_google_services(log_func)
+
+    if not google_services or 'drive' not in google_services:
+        log_func("오류: Google Drive 서비스를 사용할 수 없어 새 문서를 만들 수 없습니다.")
+        auth_logger.error("새 문서 생성 실패 - Drive 서비스 없음")
+        return None
+
+    document_title = (title or "").strip() or f"메신저 자동 기록 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    request_body = {
+        'name': document_title,
+        'mimeType': 'application/vnd.google-apps.document',
+    }
+
+    try:
+        created_document = google_services['drive'].files().create(
+            body=request_body,
+            fields='id, name, webViewLink',
+        ).execute()
+        log_func(f"백엔드: 새 Google Docs 문서 생성 완료 - {created_document.get('name')} ({created_document.get('id')})")
+        auth_logger.info(f"새 Google Docs 문서 생성 완료: {created_document}")
+        return created_document
+    except HttpError as error:
+        log_func(f"오류: 새 Google Docs 문서 생성 중 API 오류 발생 - {error}")
+        auth_logger.error(f"새 Google Docs 문서 생성 API 오류: {error}")
+        return None
+    except Exception as error:
+        log_func(f"오류: 새 Google Docs 문서 생성 중 예외 발생 - {error}")
+        auth_logger.error(f"새 Google Docs 문서 생성 예외: {error}", exc_info=True)
+        return None
+
+
+def list_accessible_google_documents(log_func, services=None, page_size=20):
+    """현재 권한 범위(drive.file)에서 접근 가능한 Google Docs 문서 목록을 조회한다."""
+    auth_logger = setup_google_auth_logging()
+    google_services = services or get_google_services(log_func)
+
+    if not google_services or 'drive' not in google_services:
+        log_func("오류: Google Drive 서비스를 사용할 수 없어 문서 목록을 가져올 수 없습니다.")
+        auth_logger.error("문서 목록 조회 실패 - Drive 서비스 없음")
+        return None
+
+    try:
+        response = google_services['drive'].files().list(
+            q="mimeType='application/vnd.google-apps.document' and trashed=false",
+            orderBy='modifiedTime desc',
+            pageSize=page_size,
+            spaces='drive',
+            fields='files(id, name, webViewLink, modifiedTime)',
+        ).execute()
+        documents = response.get('files', [])
+        log_func(f"백엔드: 접근 가능한 Google Docs 문서 {len(documents)}개 조회 완료.")
+        auth_logger.info(f"접근 가능한 Google Docs 문서 조회 완료: {len(documents)}개")
+        return documents
+    except HttpError as error:
+        log_func(f"오류: Google Docs 문서 목록 조회 중 API 오류 발생 - {error}")
+        auth_logger.error(f"Google Docs 문서 목록 조회 API 오류: {error}")
+        return None
+    except Exception as error:
+        log_func(f"오류: Google Docs 문서 목록 조회 중 예외 발생 - {error}")
+        auth_logger.error(f"Google Docs 문서 목록 조회 예외: {error}", exc_info=True)
         return None
