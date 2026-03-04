@@ -26,8 +26,9 @@ try:
     # Docs 기록 기능 버전의 backend_processor 임포트
     from src.auto_write_txt_to_docs.backend_processor import run_monitoring
 except ImportError:
-    messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
-    run_monitoring = None # 함수 부재 처리
+    # ⚠️ 수정: 모듈 레벨에서 root 없이 messagebox 호출하면 불안정 → logging으로 교체
+    logging.error("백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
+    run_monitoring = None  # 함수 부재 처리
 
 try:
     from src.auto_write_txt_to_docs.google_auth import (
@@ -36,7 +37,7 @@ try:
         list_accessible_google_documents,
     )
 except ImportError:
-    messagebox.showerror("모듈 오류", "Google 인증 모듈(google_auth.py)을 찾을 수 없습니다.")
+    logging.error("Google 인증 모듈(google_auth.py)을 찾을 수 없습니다.")
     create_google_document = None
     get_google_services = None
     list_accessible_google_documents = None
@@ -52,7 +53,7 @@ try:
         get_effective_credentials_path,
     )
 except ImportError:
-    messagebox.showerror("모듈 오류", "경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
+    logging.error("경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
     BUNDLED_CREDENTIALS_FILE_STR = None
     CONFIG_FILE_STR = "config.json"
     USER_CREDENTIALS_FILE_STR = "developer_credentials.json"
@@ -69,7 +70,7 @@ try:
         save_backup_config,
     )
 except ImportError:
-    messagebox.showerror("모듈 오류", "설정 관리 모듈(config_manager.py)을 찾을 수 없습니다.")
+    logging.error("설정 관리 모듈(config_manager.py)을 찾을 수 없습니다.")
     load_app_config = None
     load_backup_config = None
     normalize_config_data = None
@@ -79,7 +80,7 @@ except ImportError:
 try:
     from src.auto_write_txt_to_docs.ui_helpers import center_window, show_backup_restore_dialog
 except ImportError:
-    messagebox.showerror("모듈 오류", "UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
+    logging.error("UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
     center_window = None
     show_backup_restore_dialog = None
 
@@ -114,11 +115,11 @@ class MessengerDocsApp:
         # --- 상단 메뉴바 생성 ---
         self._create_menubar()
 
-        # 테마 설정
-        self.appearance_mode = ctk.StringVar(value="System")
+        # 테마 설정 (⚠️ 수정: 중복 선언이었던 L137의 두 번째 선언 제거)
+        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
         ctk.set_appearance_mode(self.appearance_mode.get())
         ctk.set_default_color_theme("blue")
-        
+
         # 메모리 모니터링 관련 변수
         self.memory_usage = ctk.StringVar(value="메모리: 확인 중...")
         self.memory_check_interval = 10000  # 10초마다 메모리 사용량 확인
@@ -127,14 +128,11 @@ class MessengerDocsApp:
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
-        
+
         # 파일 필터링 관련 변수
         self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
         self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
         self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
-        
-        # 테마 관련 변수
-        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -677,7 +675,11 @@ class MessengerDocsApp:
                                            font=ctk.CTkFont(size=12))
         self.docs_info_label.pack(side="top", anchor="e")
         
-        settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
+        # ⚠️ 수정: settings_frame을 인스턴스 변수로 저장 → disable/enable_settings_widgets에서 안전하게 참조
+        self.settings_frame = ctk.CTkFrame(main_frame)
+        self.settings_frame.pack(pady=10, padx=10, fill="x")
+        self.settings_frame.configure(border_width=1)
+        settings_frame = self.settings_frame  # 로컬 변수로도 유지 (아래 코드 호환)
         ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
 
         # 인증 파일 안내 라벨 추가
@@ -819,18 +821,7 @@ class MessengerDocsApp:
 
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
-        # --- 경로 저장 버튼 (설정 섹션 내부, 빠른 수동 저장) ---
-        path_save_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        path_save_frame.pack(fill="x", padx=10, pady=(0,10))
-
-        ctk.CTkButton(
-            path_save_frame,
-            text="경로 저장",
-            width=120,
-            command=self.save_config,
-            fg_color="#4CAF50",  # 녹색
-            hover_color="#45A049"
-        ).pack(side="right")
+        # ⚠️ 수정: "경로 저장" 버튼 제거 — "설정 저장" 버튼(control_frame)과 완전히 동일한 기능으로 중복이었음
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
     def setup_tray_icon(self):
@@ -1189,26 +1180,35 @@ class MessengerDocsApp:
                  self.log("감시 중지됨.")
              except Exception: pass # 위젯 파괴 후 예외 무시
     def disable_settings_widgets(self):
+        # ⚠️ 수정: winfo_children()[0] 인덱스 접근 → self.settings_frame 직접 참조로 안전하게 변경
         try:
-            settings_frame = self.root.winfo_children()[0].winfo_children()[0]
-            for child in settings_frame.winfo_children():
-                 if isinstance(child, ctk.CTkFrame):
-                      for widget in child.winfo_children():
-                           # 웹에서 문서를 바로 열어보는 버튼은 감시 중에도 유지
-                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "Docs 웹에서 열기":
-                               continue
-                           elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
-                               widget.configure(state="disabled")
-        except (IndexError, AttributeError): pass # 위젯 구조 변경 또는 창 파괴 시 오류 무시
+            if not hasattr(self, 'settings_frame') or not self.settings_frame.winfo_exists():
+                return
+            for child in self.settings_frame.winfo_children():
+                if isinstance(child, ctk.CTkFrame):
+                    for widget in child.winfo_children():
+                        # 웹에서 문서를 바로 열어보는 버튼은 감시 중에도 유지
+                        if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "Docs 웹에서 열기":
+                            continue
+                        elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                            widget.configure(state="disabled")
+        except AttributeError:
+            pass  # 위젯 파괴 후 예외 무시
+
     def enable_settings_widgets(self):
+        # ⚠️ 수정: winfo_children()[0] 인덱스 접근 → self.settings_frame 직접 참조로 안전하게 변경
         try:
-             if not self.root.winfo_exists(): return
-             settings_frame = self.root.winfo_children()[0].winfo_children()[0]
-             for child in settings_frame.winfo_children():
-                  if isinstance(child, ctk.CTkFrame):
-                       for widget in child.winfo_children():
-                            if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="normal")
-        except (IndexError, AttributeError): pass
+            if not self.root.winfo_exists():
+                return
+            if not hasattr(self, 'settings_frame') or not self.settings_frame.winfo_exists():
+                return
+            for child in self.settings_frame.winfo_children():
+                if isinstance(child, ctk.CTkFrame):
+                    for widget in child.winfo_children():
+                        if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                            widget.configure(state="normal")
+        except AttributeError:
+            pass
 
     def show_help_dialog(self):
         """초기 실행 시 도움말 표시"""
