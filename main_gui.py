@@ -26,23 +26,40 @@ try:
     # Docs 기록 기능 버전의 backend_processor 임포트
     from src.auto_write_txt_to_docs.backend_processor import run_monitoring
 except ImportError:
-    messagebox.showerror("모듈 오류", "백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
-    run_monitoring = None # 함수 부재 처리
+    # ⚠️ 수정: 모듈 레벨에서 root 없이 messagebox 호출하면 불안정 → logging으로 교체
+    logging.error("백엔드 처리 모듈(backend_processor.py)을 찾을 수 없습니다.")
+    run_monitoring = None  # 함수 부재 처리
+
+try:
+    from src.auto_write_txt_to_docs.google_auth import (
+        create_google_document,
+        get_google_services,
+        list_accessible_google_documents,
+    )
+except ImportError:
+    logging.error("Google 인증 모듈(google_auth.py)을 찾을 수 없습니다.")
+    create_google_document = None
+    get_google_services = None
+    list_accessible_google_documents = None
 
 # path_utils 임포트 (공통 경로 정책 사용)
 try:
     from src.auto_write_txt_to_docs.path_utils import (
         BUNDLED_CREDENTIALS_FILE_STR,
         CONFIG_FILE_STR,
+        USER_CREDENTIALS_FILE_STR,
         LEGACY_CONFIG_FILE_STR,
         LOG_DIR_STR,
+        get_effective_credentials_path,
     )
 except ImportError:
-    messagebox.showerror("모듈 오류", "경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
+    logging.error("경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
     BUNDLED_CREDENTIALS_FILE_STR = None
     CONFIG_FILE_STR = "config.json"
+    USER_CREDENTIALS_FILE_STR = "developer_credentials.json"
     LEGACY_CONFIG_FILE_STR = "config.json"
     LOG_DIR_STR = "logs"
+    get_effective_credentials_path = None
 
 try:
     from src.auto_write_txt_to_docs.config_manager import (
@@ -53,7 +70,7 @@ try:
         save_backup_config,
     )
 except ImportError:
-    messagebox.showerror("모듈 오류", "설정 관리 모듈(config_manager.py)을 찾을 수 없습니다.")
+    logging.error("설정 관리 모듈(config_manager.py)을 찾을 수 없습니다.")
     load_app_config = None
     load_backup_config = None
     normalize_config_data = None
@@ -63,7 +80,7 @@ except ImportError:
 try:
     from src.auto_write_txt_to_docs.ui_helpers import center_window, show_backup_restore_dialog
 except ImportError:
-    messagebox.showerror("모듈 오류", "UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
+    logging.error("UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
     center_window = None
     show_backup_restore_dialog = None
 
@@ -73,6 +90,19 @@ def extract_google_id_from_url(url_or_id):
     if not url_or_id or not isinstance(url_or_id, str): return url_or_id
     match_docs = re.search(r'/document/d/([a-zA-Z0-9-_]+)', url_or_id)
     return match_docs.group(1) if match_docs else url_or_id
+
+
+def format_google_modified_time(modified_time_text):
+    """Google Drive 수정 시각 문자열을 사용자에게 읽기 쉬운 형식으로 변환한다."""
+    if not modified_time_text:
+        return "수정 시각 정보 없음"
+
+    try:
+        normalized_text = modified_time_text.replace("Z", "+00:00")
+        parsed_time = datetime.fromisoformat(normalized_text)
+        return parsed_time.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return modified_time_text
 
 class MessengerDocsApp:
     def __init__(self, root):
@@ -85,11 +115,11 @@ class MessengerDocsApp:
         # --- 상단 메뉴바 생성 ---
         self._create_menubar()
 
-        # 테마 설정
-        self.appearance_mode = ctk.StringVar(value="System")
+        # 테마 설정 (⚠️ 수정: 중복 선언이었던 L137의 두 번째 선언 제거)
+        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
         ctk.set_appearance_mode(self.appearance_mode.get())
         ctk.set_default_color_theme("blue")
-        
+
         # 메모리 모니터링 관련 변수
         self.memory_usage = ctk.StringVar(value="메모리: 확인 중...")
         self.memory_check_interval = 10000  # 10초마다 메모리 사용량 확인
@@ -98,14 +128,11 @@ class MessengerDocsApp:
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
-        
+
         # 파일 필터링 관련 변수
         self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
         self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
         self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
-        
-        # 테마 관련 변수
-        self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -168,8 +195,8 @@ class MessengerDocsApp:
 
     def check_credentials_file(self):
         """ Google API 인증 파일 (developer_credentials.json) 존재 여부 확인 및 안내 """
-        if not BUNDLED_CREDENTIALS_FILE_STR:
-            self.log("오류: BUNDLED_CREDENTIALS_FILE_STR이 설정되지 않았습니다. path_utils.py를 확인하세요.")
+        if not BUNDLED_CREDENTIALS_FILE_STR and not USER_CREDENTIALS_FILE_STR:
+            self.log("오류: 인증 파일 경로 상수가 설정되지 않았습니다. path_utils.py를 확인하세요.")
             messagebox.showwarning(
                 "설정 오류",
                 "프로그램 내부 설정(인증 파일 경로)에 문제가 있습니다.\n개발자에게 문의하세요.",
@@ -177,24 +204,21 @@ class MessengerDocsApp:
             )
             return
 
-        # 실제 파일 존재 여부 확인
-        # BUNDLED_CREDENTIALS_FILE_STR은 절대 경로일 수도, 상대 경로일 수도 있습니다.
-        # path_utils.py의 get_bundled_credentials_path() 로직에 따라 결정됩니다.
-        # 여기서는 해당 경로 문자열을 그대로 사용합니다.
-        credentials_path = BUNDLED_CREDENTIALS_FILE_STR
+        credentials_path = str(get_effective_credentials_path()) if get_effective_credentials_path else BUNDLED_CREDENTIALS_FILE_STR
+        credential_source = "사용자 설정 폴더" if USER_CREDENTIALS_FILE_STR and credentials_path == USER_CREDENTIALS_FILE_STR else "기본 번들 경로"
 
-        # path_utils.py에서 get_bundled_credentials_path 함수가 print 하므로, 여기서도 로그를 남깁니다.
-        self.log(f"확인 중인 인증 파일 경로: {credentials_path}")
+        self.log(f"확인 중인 인증 파일 경로: {credentials_path} ({credential_source})")
 
         if not os.path.exists(credentials_path):
             self.log(f"경고: 인증 파일({credentials_path})을 찾을 수 없습니다.")
             open_wizard = messagebox.askyesno(
                 "인증 파일 누락",
-                f"Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
-                f"예상 경로: {credentials_path}\n\n"
+                "Google API 인증을 위한 'developer_credentials.json' 파일을 찾을 수 없습니다.\n\n"
+                f"사용자 설정 경로: {USER_CREDENTIALS_FILE_STR}\n"
+                f"기본 번들 경로: {BUNDLED_CREDENTIALS_FILE_STR}\n\n"
                 "프로그램 사용을 위해서는 이 파일이 필요합니다.\n"
                 "README.md 파일의 '설정' 섹션을 참고하거나,\n"
-                "바로 이어서 'Google 인증 설정 마법사'를 통해 준비할 수 있습니다.\n\n"
+                "바로 이어서 'Google 인증 설정 마법사'를 통해 사용자 설정 폴더에 복사할 수 있습니다.\n\n"
                 "설정 마법사를 지금 열어 파일을 준비하시겠습니까?",
                 parent=self.root
             )
@@ -343,7 +367,7 @@ class MessengerDocsApp:
         
         # Google Docs URL/ID 검사
         if not docs_input_val:
-            errors.append("Google Docs URL 또는 ID를 입력해주세요.")
+            errors.append("Google Docs URL/ID를 입력하거나 '새 문서 만들기' 또는 '문서 목록'으로 문서를 지정해주세요.")
         else:
             docs_id = extract_google_id_from_url(docs_input_val)
             if not docs_id:
@@ -411,6 +435,190 @@ class MessengerDocsApp:
         except Exception as e:
             self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
             messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
+
+    def focus_existing_docs_input(self):
+        """기존 Google Docs URL/ID를 직접 입력할 수 있도록 입력칸에 포커스를 준다."""
+        if hasattr(self, "docs_input_entry"):
+            self.docs_input_entry.focus_set()
+            self.docs_input_entry.icursor(ctk.END)
+        self.log("기존 Google Docs 주소/ID 직접 입력 모드.")
+
+    def get_google_services_for_ui(self):
+        """GUI에서 문서 생성/선택에 사용할 Google 서비스 객체를 준비한다."""
+        if not get_google_services:
+            messagebox.showerror("모듈 오류", "Google 인증 모듈을 불러오지 못했습니다.", parent=self.root)
+            return None
+
+        self.log("Google Docs/Drive 서비스 연결 확인 중...")
+        services = get_google_services(self.log)
+        if not services:
+            messagebox.showerror(
+                "Google 연결 오류",
+                "Google 인증 또는 서비스 초기화에 실패했습니다.\n로그를 확인한 뒤 다시 시도하세요.",
+                parent=self.root
+            )
+            return None
+
+        if 'docs' not in services or 'drive' not in services:
+            messagebox.showerror(
+                "Google 연결 오류",
+                "문서 생성/선택에 필요한 Google Docs 또는 Drive 서비스가 준비되지 않았습니다.",
+                parent=self.root
+            )
+            return None
+
+        return services
+
+    def create_new_google_doc(self):
+        """현재 권한 범위에서 새 Google Docs 문서를 만들고 자동으로 선택한다."""
+        if not create_google_document:
+            messagebox.showerror("모듈 오류", "문서 생성 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        title_dialog = ctk.CTkInputDialog(
+            text="새 Google Docs 문서 제목을 입력하세요.\n비워두면 자동 제목을 사용합니다.",
+            title="새 Google Docs 문서 만들기"
+        )
+        document_title = title_dialog.get_input()
+        if document_title is None:
+            return
+
+        services = self.get_google_services_for_ui()
+        if not services:
+            return
+
+        created_document = create_google_document(self.log, document_title, services=services)
+        if not created_document:
+            messagebox.showerror("문서 생성 실패", "새 Google Docs 문서를 만들지 못했습니다.\n로그를 확인하세요.", parent=self.root)
+            return
+
+        document_id = created_document.get("id", "")
+        document_name = created_document.get("name", "새 Google Docs 문서")
+        self.docs_input.set(document_id)
+        self.log(f"새 문서를 현재 대상 문서로 설정했습니다: {document_name} ({document_id})")
+
+        open_created_document = messagebox.askyesno(
+            "문서 생성 완료",
+            f"새 문서가 생성되었습니다.\n\n제목: {document_name}\n문서 ID: {document_id}\n\n지금 브라우저에서 열까요?",
+            parent=self.root
+        )
+        if open_created_document and created_document.get("webViewLink"):
+            webbrowser.open(created_document["webViewLink"])
+
+    def select_google_doc(self):
+        """현재 권한(drive.file)에서 접근 가능한 Google Docs 문서 목록을 표시한다."""
+        if not list_accessible_google_documents:
+            messagebox.showerror("모듈 오류", "문서 목록 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        services = self.get_google_services_for_ui()
+        if not services:
+            return
+
+        documents = list_accessible_google_documents(self.log, services=services, page_size=20)
+        if documents is None:
+            messagebox.showerror("문서 목록 오류", "Google Docs 문서 목록을 불러오지 못했습니다.\n로그를 확인하세요.", parent=self.root)
+            return
+
+        if not documents:
+            messagebox.showinfo(
+                "표시할 문서 없음",
+                "현재 권한(drive.file) 기준으로 이 앱이 접근 가능한 Google Docs 문서가 없습니다.\n"
+                "먼저 '새 문서 만들기'로 문서를 생성하면 이 목록에 표시됩니다.",
+                parent=self.root
+            )
+            return
+
+        selector_window = ctk.CTkToplevel(self.root)
+        selector_window.title("Google Docs 문서 목록")
+        selector_window.geometry("760x520")
+        selector_window.minsize(760, 520)
+        selector_window.transient(self.root)
+        selector_window.grab_set()
+
+        main_frame = ctk.CTkFrame(selector_window)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            main_frame,
+            text="Google Docs 문서 목록",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkLabel(
+            main_frame,
+            text=(
+                "현재 권한(drive.file) 기준으로 이 앱이 만들었거나 이 앱이 이미 접근 가능한 문서만 표시됩니다.\n"
+                "기존 Drive 전체 문서는 모두 보이지 않을 수 있습니다."
+            ),
+            justify="left",
+            wraplength=700
+        ).pack(anchor="w", fill="x", pady=(0, 12))
+
+        list_frame = ctk.CTkScrollableFrame(main_frame)
+        list_frame.pack(fill="both", expand=True)
+
+        def choose_document(document_info):
+            document_id = document_info.get("id", "")
+            document_name = document_info.get("name", "이름 없는 문서")
+            self.docs_input.set(document_id)
+            self.log(f"문서 목록에서 선택 완료: {document_name} ({document_id})")
+            selector_window.destroy()
+
+        for document_info in documents:
+            row_frame = ctk.CTkFrame(list_frame)
+            row_frame.pack(fill="x", padx=4, pady=4)
+
+            info_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+            info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+
+            document_name = document_info.get("name", "이름 없는 문서")
+            modified_time = format_google_modified_time(document_info.get("modifiedTime"))
+            ctk.CTkLabel(
+                info_frame,
+                text=document_name,
+                font=ctk.CTkFont(weight="bold"),
+                anchor="w",
+                justify="left"
+            ).pack(anchor="w", fill="x")
+            ctk.CTkLabel(
+                info_frame,
+                text=f"최근 수정: {modified_time}\n문서 ID: {document_info.get('id', '')}",
+                justify="left",
+                anchor="w"
+            ).pack(anchor="w", fill="x", pady=(2, 0))
+
+            ctk.CTkButton(
+                row_frame,
+                text="선택",
+                width=70,
+                command=lambda doc=document_info: choose_document(doc)
+            ).pack(side="right", padx=(6, 10), pady=10)
+
+            if document_info.get("webViewLink"):
+                ctk.CTkButton(
+                    row_frame,
+                    text="열기",
+                    width=70,
+                    command=lambda url=document_info["webViewLink"]: webbrowser.open(url)
+                ).pack(side="right", padx=6, pady=10)
+
+        ctk.CTkButton(
+            main_frame,
+            text="닫기",
+            width=100,
+            command=selector_window.destroy
+        ).pack(anchor="e", pady=(12, 0))
+
+        if center_window:
+            center_window(selector_window)
+        else:
+            selector_window.update_idletasks()
+            width = selector_window.winfo_width()
+            height = selector_window.winfo_height()
+            x = (selector_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (selector_window.winfo_screenheight() // 2) - (height // 2)
+            selector_window.geometry(f"{width}x{height}+{x}+{y}")
     
     def update_status(self, status_text, detail_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
@@ -467,7 +675,11 @@ class MessengerDocsApp:
                                            font=ctk.CTkFont(size=12))
         self.docs_info_label.pack(side="top", anchor="e")
         
-        settings_frame = ctk.CTkFrame(main_frame); settings_frame.pack(pady=10, padx=10, fill="x"); settings_frame.configure(border_width=1)
+        # ⚠️ 수정: settings_frame을 인스턴스 변수로 저장 → disable/enable_settings_widgets에서 안전하게 참조
+        self.settings_frame = ctk.CTkFrame(main_frame)
+        self.settings_frame.pack(pady=10, padx=10, fill="x")
+        self.settings_frame.configure(border_width=1)
+        settings_frame = self.settings_frame  # 로컬 변수로도 유지 (아래 코드 호환)
         ctk.CTkLabel(settings_frame, text="설정", font=ctk.CTkFont(weight="bold")).pack(pady=(5,0)) # pady 변경
 
         # 인증 파일 안내 라벨 추가
@@ -502,21 +714,37 @@ class MessengerDocsApp:
         
         # Credentials 파일은 이제 자동으로 path_utils에서 관리됩니다
         
-        # Google Docs URL/ID 설정
-        docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(5,10))
-        ctk.CTkLabel(docs_frame, text="Google Docs URL/ID:", width=120).pack(side="left", padx=(0,5))
-        ctk.CTkEntry(docs_frame, textvariable=self.docs_input).pack(side="left", fill="x", expand=True, padx=5)
-        
-        # 웹에서 열기 버튼 (아이콘 추가 및 스타일 개선)
-        docs_button = ctk.CTkButton(
-            docs_frame, 
-            text="문서 열기", 
-            width=80, 
-            command=self.open_docs_in_browser,
-            fg_color="#4285F4",  # Google 파란색
-            hover_color="#3367D6"  # 어두운 파란색
-        )
-        docs_button.pack(side="left", padx=(5,0))
+        # Google Docs 대상 문서 설정
+        docs_action_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_action_frame.pack(fill="x", padx=10, pady=(5,5))
+        ctk.CTkLabel(docs_action_frame, text="문서 지정:", width=120).pack(side="left", padx=(0,5))
+
+        ctk.CTkButton(
+            docs_action_frame,
+            text="새 문서 만들기",
+            width=110,
+            command=self.create_new_google_doc,
+            fg_color="#0F9D58",
+            hover_color="#0B8043"
+        ).pack(side="left", padx=(5,0))
+
+        ctk.CTkButton(
+            docs_action_frame,
+            text="기존 주소 입력",
+            width=110,
+            command=self.focus_existing_docs_input
+        ).pack(side="left", padx=(5,0))
+
+        docs_frame = ctk.CTkFrame(settings_frame, fg_color="transparent"); docs_frame.pack(fill="x", padx=10, pady=(0,10))
+        ctk.CTkLabel(docs_frame, text="기존 주소/ID:", width=120).pack(side="left", padx=(0,5))
+        self.docs_input_entry = ctk.CTkEntry(docs_frame, textvariable=self.docs_input)
+        self.docs_input_entry.pack(side="left", fill="x", expand=True, padx=5)
+
+        ctk.CTkButton(
+            docs_frame,
+            text="문서 목록",
+            width=90,
+            command=self.select_google_doc
+        ).pack(side="left", padx=(5,0))
         
         # 제어 버튼 프레임
         control_frame = ctk.CTkFrame(main_frame, fg_color="transparent"); control_frame.pack(pady=10, fill="x")
@@ -593,18 +821,7 @@ class MessengerDocsApp:
 
         self.log_text = ctk.CTkTextbox(log_frame, state='disabled', wrap='word', height=150); self.log_text.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
-        # --- 경로 저장 버튼 (설정 섹션 내부, 빠른 수동 저장) ---
-        path_save_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        path_save_frame.pack(fill="x", padx=10, pady=(0,10))
-
-        ctk.CTkButton(
-            path_save_frame,
-            text="경로 저장",
-            width=120,
-            command=self.save_config,
-            fg_color="#4CAF50",  # 녹색
-            hover_color="#45A049"
-        ).pack(side="right")
+        # ⚠️ 수정: "경로 저장" 버튼 제거 — "설정 저장" 버튼(control_frame)과 완전히 동일한 기능으로 중복이었음
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
     def setup_tray_icon(self):
@@ -963,26 +1180,35 @@ class MessengerDocsApp:
                  self.log("감시 중지됨.")
              except Exception: pass # 위젯 파괴 후 예외 무시
     def disable_settings_widgets(self):
+        # ⚠️ 수정: winfo_children()[0] 인덱스 접근 → self.settings_frame 직접 참조로 안전하게 변경
         try:
-            settings_frame = self.root.winfo_children()[0].winfo_children()[0]
-            for child in settings_frame.winfo_children():
-                 if isinstance(child, ctk.CTkFrame):
-                      for widget in child.winfo_children():
-                           # "웹에서 열기" 버튼은 항상 활성화 상태로 유지
-                           if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "웹에서 열기":
-                               continue
-                           elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
-                               widget.configure(state="disabled")
-        except (IndexError, AttributeError): pass # 위젯 구조 변경 또는 창 파괴 시 오류 무시
+            if not hasattr(self, 'settings_frame') or not self.settings_frame.winfo_exists():
+                return
+            for child in self.settings_frame.winfo_children():
+                if isinstance(child, ctk.CTkFrame):
+                    for widget in child.winfo_children():
+                        # 웹에서 문서를 바로 열어보는 버튼은 감시 중에도 유지
+                        if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "Docs 웹에서 열기":
+                            continue
+                        elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                            widget.configure(state="disabled")
+        except AttributeError:
+            pass  # 위젯 파괴 후 예외 무시
+
     def enable_settings_widgets(self):
+        # ⚠️ 수정: winfo_children()[0] 인덱스 접근 → self.settings_frame 직접 참조로 안전하게 변경
         try:
-             if not self.root.winfo_exists(): return
-             settings_frame = self.root.winfo_children()[0].winfo_children()[0]
-             for child in settings_frame.winfo_children():
-                  if isinstance(child, ctk.CTkFrame):
-                       for widget in child.winfo_children():
-                            if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)): widget.configure(state="normal")
-        except (IndexError, AttributeError): pass
+            if not self.root.winfo_exists():
+                return
+            if not hasattr(self, 'settings_frame') or not self.settings_frame.winfo_exists():
+                return
+            for child in self.settings_frame.winfo_children():
+                if isinstance(child, ctk.CTkFrame):
+                    for widget in child.winfo_children():
+                        if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                            widget.configure(state="normal")
+        except AttributeError:
+            pass
 
     def show_help_dialog(self):
         """초기 실행 시 도움말 표시"""
@@ -1019,7 +1245,10 @@ class MessengerDocsApp:
 2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
    - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
    - 문서 ID만 직접 입력할 수 있습니다.
-   - '웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
+   - '새 문서 만들기' 버튼으로 현재 권한 범위에서 새 문서를 만들고 바로 연결할 수 있습니다.
+   - '기존 주소 입력' 버튼을 누르면 기존 주소/ID 입력칸에 바로 입력할 수 있습니다.
+   - '문서 목록' 버튼으로 이 앱이 접근 가능한 문서 목록에서 선택할 수 있습니다.
+   - 'Docs 웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
 
 3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
 
@@ -1832,7 +2061,7 @@ class MessengerDocsApp:
                 "1) 'Google Cloud Console 열기'를 눌러 API를 활성화하고\n"
                 "   OAuth 데스크톱 애플리케이션 자격 증명(JSON)을 다운로드하세요.\n\n"
                 "2) 'JSON 파일 선택'을 눌러 다운로드한 파일을 선택하면\n"
-                "   프로그램이 자동으로 developer_credentials.json 으로 복사합니다.\n\n"
+                "   프로그램이 사용자 설정 폴더의 developer_credentials.json 으로 복사합니다.\n\n"
                 "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
                 "   프로그램을 다시 실행하거나 감시를 시작하세요."
             ),
@@ -1854,20 +2083,23 @@ class MessengerDocsApp:
         console_btn.pack(fill="x", pady=5)
 
         # 결과 라벨 (상태 표시)
-        result_label = ctk.CTkLabel(frame, text="JSON 파일을 아직 선택하지 않았습니다.")
+        result_label = ctk.CTkLabel(
+            frame,
+            text=f"JSON 파일을 아직 선택하지 않았습니다.\n복사 대상: {USER_CREDENTIALS_FILE_STR}"
+        )
         result_label.pack(fill="x", pady=(10, 5))
 
-        # BUNDLED_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
-        if not BUNDLED_CREDENTIALS_FILE_STR:
+        # USER_CREDENTIALS_FILE_STR 이 None 일 가능성 대비
+        if not USER_CREDENTIALS_FILE_STR:
             messagebox.showerror(
                 "경로 오류",
-                "인증 파일 기본 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
+                "인증 파일 저장 경로가 설정되어 있지 않습니다.\n프로그램을 다시 실행하거나 개발자에게 문의하세요.",
                 parent=wizard
             )
             wizard.destroy()
             return
 
-        credentials_target = Path(str(BUNDLED_CREDENTIALS_FILE_STR))
+        credentials_target = Path(str(USER_CREDENTIALS_FILE_STR))
 
         # JSON 선택 → 복사
         def select_and_copy_json():

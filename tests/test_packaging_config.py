@@ -22,8 +22,11 @@ class PackagingConfigTests(unittest.TestCase):
     def test_setuptools_configuration_includes_main_gui_module(self):
         setuptools_config = self.pyproject_data["tool"]["setuptools"]
         package_find_config = setuptools_config["packages"]["find"]
+        package_data_config = setuptools_config["package-data"]
 
         self.assertEqual(setuptools_config["py-modules"], ["main_gui"])
+        self.assertIn("src.auto_write_txt_to_docs", package_data_config)
+        self.assertIn("assets/*.json", package_data_config["src.auto_write_txt_to_docs"])
         self.assertEqual(package_find_config["include"], ["src*"])
         self.assertTrue(package_find_config["namespaces"])
 

@@ -91,6 +91,26 @@ def get_bundled_credentials_path(filename="developer_credentials.json"):
         return base_path / "src" / "auto_write_txt_to_docs" / "assets" / filename
 
 
+def get_user_credentials_path(filename="developer_credentials.json") -> Path:
+    """사용자가 직접 지정한 OAuth 클라이언트 JSON 저장 경로를 반환합니다."""
+    return get_safe_config_path(filename, use_user_dir=True)
+
+
+def get_effective_credentials_path(
+    filename="developer_credentials.json",
+    user_credentials_path=None,
+    bundled_credentials_path=None,
+) -> Path:
+    """사용자 지정 인증 파일이 있으면 우선 사용하고, 없으면 번들 파일을 사용합니다."""
+    user_path = Path(user_credentials_path) if user_credentials_path is not None else get_user_credentials_path(filename)
+    bundled_path = Path(bundled_credentials_path) if bundled_credentials_path is not None else get_bundled_credentials_path(filename)
+
+    if user_path.exists():
+        return user_path
+
+    return bundled_path
+
+
 # --- 기본 경로 상수 ---
 PROJECT_ROOT = get_project_root()
 
@@ -116,6 +136,9 @@ LEGACY_CACHE_FILE_STR = str(LEGACY_CACHE_FILE)
 # ⭐⭐⭐ 아래 코드 추가 ⭐⭐⭐
 # 프로그램 신분증 파일의 최종 주소 (문자열 버전)
 BUNDLED_CREDENTIALS_FILE_STR = str(get_bundled_credentials_path())
+# 사용자가 직접 지정한 인증 파일 저장 경로 (문자열 버전)
+USER_CREDENTIALS_FILE = get_user_credentials_path()
+USER_CREDENTIALS_FILE_STR = str(USER_CREDENTIALS_FILE)
 # token.json (사용자 출입 허가증) 저장 경로도 명확히 정의 (google_auth.py 에서 사용)
 TOKEN_FILE_PATH = get_safe_cache_path("token.json", use_user_dir=True)  # ⭐token.json은 반드시 사용자 폴더에!⭐
 TOKEN_FILE_STR = str(TOKEN_FILE_PATH)

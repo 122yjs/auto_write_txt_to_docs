@@ -13,16 +13,28 @@ from googleapiclient.errors import HttpError
 try:
     # BUNDLED_CREDENTIALS_FILE_STR: 프로그램 신분증 주소
     # TOKEN_FILE_STR: 사용자 출입 허가증 저장 주소
-    from src.auto_write_txt_to_docs.path_utils import BUNDLED_CREDENTIALS_FILE_STR, TOKEN_FILE_STR
+    from src.auto_write_txt_to_docs.path_utils import (
+        BUNDLED_CREDENTIALS_FILE_STR,
+        TOKEN_FILE_STR,
+        USER_CREDENTIALS_FILE_STR,
+        get_effective_credentials_path,
+    )
 except ImportError:
     try:
         # 상대 import 시도 (패키지 내에서 실행될 때)
-        from .path_utils import BUNDLED_CREDENTIALS_FILE_STR, TOKEN_FILE_STR
+        from .path_utils import (
+            BUNDLED_CREDENTIALS_FILE_STR,
+            TOKEN_FILE_STR,
+            USER_CREDENTIALS_FILE_STR,
+            get_effective_credentials_path,
+        )
     except ImportError:
         # path_utils 파일이 없는 비상 상황 대비
         print("오류: path_utils.py 파일을 찾을 수 없습니다. Google 인증이 작동하지 않습니다.")
         BUNDLED_CREDENTIALS_FILE_STR = None
+        USER_CREDENTIALS_FILE_STR = None
         TOKEN_FILE_STR = 'token.json'  # 임시 경로
+        get_effective_credentials_path = None
 
 # 프로그램이 구글 문서에 접근할 수 있도록 '권한 범위(Scope)' 설정
 SCOPES = [
@@ -51,7 +63,10 @@ def authenticate(log_func):
     creds = None  # 출입 허가증을 담을 변수 초기화
 
     # ⭐ 1. 프로그램 신분증 파일 주소 가져오기 (path_utils에서) ⭐
-    credentials_path = BUNDLED_CREDENTIALS_FILE_STR
+    if get_effective_credentials_path:
+        credentials_path = str(get_effective_credentials_path())
+    else:
+        credentials_path = BUNDLED_CREDENTIALS_FILE_STR
     # ⭐ 2. 사용자 출입 허가증 저장 파일 주소 가져오기 (path_utils에서) ⭐
     token_path = TOKEN_FILE_STR
 
@@ -64,12 +79,16 @@ def authenticate(log_func):
 
     # 신분증 파일 존재 여부 확인
     if not os.path.exists(credentials_path):
-        error_msg = f"오류: Google 인증 파일({os.path.basename(credentials_path)})을 찾을 수 없습니다. 프로그램을 다시 설치하거나, 'assets' 폴더에 인증 파일이 있는지 확인해 주세요."
+        error_msg = (
+            f"오류: Google 인증 파일({os.path.basename(credentials_path)})을 찾을 수 없습니다. "
+            f"사용자 설정 경로({USER_CREDENTIALS_FILE_STR}) 또는 기본 번들 경로({BUNDLED_CREDENTIALS_FILE_STR})를 확인해 주세요."
+        )
         log_func(error_msg)
         auth_logger.critical(f"Credentials file missing at: {credentials_path}")
         return None
 
-    auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path}")
+    credential_source = "사용자 지정 인증 파일" if USER_CREDENTIALS_FILE_STR and credentials_path == USER_CREDENTIALS_FILE_STR else "번들 인증 파일"
+    auth_logger.info(f"인증 시작 - 토큰 경로: {token_path}, 신분증 경로: {credentials_path} ({credential_source})")
     log_func(f"백엔드: Google 인증 확인 중... (토큰 저장소: {token_path})")
 
     # ⭐ 3. 기존 출입 허가증(token.json)이 있는지 확인하고 불러오기 ⭐
@@ -77,6 +96,18 @@ def authenticate(log_func):
         try:
             # 파일에서 출입 허가증 정보 로드 (권한 범위 SCOPES도 맞는지 확인)
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+            # [추가] 403 에러 방지: 토큰의 client_id 비교
+            try:
+                import json
+                with open(credentials_path, 'r', encoding='utf-8') as f:
+                    client_config = json.load(f)
+                    expected_client_id = client_config.get('installed', {}).get('client_id') or client_config.get('web', {}).get('client_id')
+                if creds.client_id != expected_client_id:
+                    log_func('경고: 앱 연결 변경됨. 기존 토큰을 폐기합니다.')
+                    auth_logger.warning('토큰 client_id 불일치.')
+                    creds = None
+            except Exception as e:
+                auth_logger.error(f'client_id 검증 실패: {e}')
             log_func("백엔드: 저장된 Google 사용자 인증 정보(토큰) 로드 성공.")
             auth_logger.info("기존 토큰 파일 로드 성공")
         except Exception as e:
@@ -153,13 +184,11 @@ def get_google_services(log_func):
 
     services = {}
     try:
-        log_func("백엔드: Google Docs 서비스 객체 생성 시도...")
-        # Docs 서비스만 생성
+        log_func("백엔드: Google Docs/Drive 서비스 객체 생성 시도...")
         services['docs'] = build('docs', 'v1', credentials=creds)
-        # 필요시 Drive 서비스도 추가 가능
-        # services['drive'] = build('drive', 'v3', credentials=creds)
-        log_func("백엔드: Google Docs 서비스 객체 생성 완료.")
-        auth_logger.info("Google 서비스 객체 생성 완료")
+        services['drive'] = build('drive', 'v3', credentials=creds)
+        log_func("백엔드: Google Docs/Drive 서비스 객체 생성 완료.")
+        auth_logger.info("Google Docs/Drive 서비스 객체 생성 완료")
         return services
     except HttpError as error:
         log_func(f"오류: Google 서비스 객체 생성 중 API 오류 발생 - {error}")
@@ -168,4 +197,70 @@ def get_google_services(log_func):
     except Exception as e:
         log_func(f"오류: Google 서비스 객체 생성 중 예외 발생 - {e}")
         auth_logger.error(f"Google 서비스 객체 생성 중 예외: {e}", exc_info=True)
+        return None
+
+
+def create_google_document(log_func, title, services=None):
+    """현재 권한 범위에서 새 Google Docs 문서를 생성한다."""
+    auth_logger = setup_google_auth_logging()
+    google_services = services or get_google_services(log_func)
+
+    if not google_services or 'drive' not in google_services:
+        log_func("오류: Google Drive 서비스를 사용할 수 없어 새 문서를 만들 수 없습니다.")
+        auth_logger.error("새 문서 생성 실패 - Drive 서비스 없음")
+        return None
+
+    document_title = (title or "").strip() or f"메신저 자동 기록 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    request_body = {
+        'name': document_title,
+        'mimeType': 'application/vnd.google-apps.document',
+    }
+
+    try:
+        created_document = google_services['drive'].files().create(
+            body=request_body,
+            fields='id, name, webViewLink',
+        ).execute()
+        log_func(f"백엔드: 새 Google Docs 문서 생성 완료 - {created_document.get('name')} ({created_document.get('id')})")
+        auth_logger.info(f"새 Google Docs 문서 생성 완료: {created_document}")
+        return created_document
+    except HttpError as error:
+        log_func(f"오류: 새 Google Docs 문서 생성 중 API 오류 발생 - {error}")
+        auth_logger.error(f"새 Google Docs 문서 생성 API 오류: {error}")
+        return None
+    except Exception as error:
+        log_func(f"오류: 새 Google Docs 문서 생성 중 예외 발생 - {error}")
+        auth_logger.error(f"새 Google Docs 문서 생성 예외: {error}", exc_info=True)
+        return None
+
+
+def list_accessible_google_documents(log_func, services=None, page_size=20):
+    """현재 권한 범위(drive.file)에서 접근 가능한 Google Docs 문서 목록을 조회한다."""
+    auth_logger = setup_google_auth_logging()
+    google_services = services or get_google_services(log_func)
+
+    if not google_services or 'drive' not in google_services:
+        log_func("오류: Google Drive 서비스를 사용할 수 없어 문서 목록을 가져올 수 없습니다.")
+        auth_logger.error("문서 목록 조회 실패 - Drive 서비스 없음")
+        return None
+
+    try:
+        response = google_services['drive'].files().list(
+            q="mimeType='application/vnd.google-apps.document' and trashed=false",
+            orderBy='modifiedTime desc',
+            pageSize=page_size,
+            spaces='drive',
+            fields='files(id, name, webViewLink, modifiedTime)',
+        ).execute()
+        documents = response.get('files', [])
+        log_func(f"백엔드: 접근 가능한 Google Docs 문서 {len(documents)}개 조회 완료.")
+        auth_logger.info(f"접근 가능한 Google Docs 문서 조회 완료: {len(documents)}개")
+        return documents
+    except HttpError as error:
+        log_func(f"오류: Google Docs 문서 목록 조회 중 API 오류 발생 - {error}")
+        auth_logger.error(f"Google Docs 문서 목록 조회 API 오류: {error}")
+        return None
+    except Exception as error:
+        log_func(f"오류: Google Docs 문서 목록 조회 중 예외 발생 - {error}")
+        auth_logger.error(f"Google Docs 문서 목록 조회 예외: {error}", exc_info=True)
         return None

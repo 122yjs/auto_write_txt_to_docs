@@ -37,6 +37,9 @@ auto_write_gui = "main_gui:main"
 [tool.setuptools]
 py-modules = ["main_gui"]
 
+[tool.setuptools.package-data]
+"src.auto_write_txt_to_docs" = ["assets/*.json"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
