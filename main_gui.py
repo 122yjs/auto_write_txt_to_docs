@@ -85,6 +85,18 @@ except ImportError:
     save_backup_config = None
 
 try:
+    from src.auto_write_txt_to_docs.autostart_utils import (
+        is_windows_startup_enabled,
+        set_windows_startup_enabled,
+        supports_windows_startup,
+    )
+except ImportError:
+    logging.error("자동 실행 유틸리티 모듈(autostart_utils.py)을 찾을 수 없습니다.")
+    is_windows_startup_enabled = None
+    set_windows_startup_enabled = None
+    supports_windows_startup = None
+
+try:
     from src.auto_write_txt_to_docs.ui_helpers import center_window, show_backup_restore_dialog
 except ImportError:
     logging.error("UI 헬퍼 모듈(ui_helpers.py)을 찾을 수 없습니다.")
@@ -185,8 +197,10 @@ class MessengerDocsApp:
 
         # --- 변수 선언 ---
         self.first_run = tk.BooleanVar(value=True)
+        self.launch_on_windows_startup = tk.BooleanVar(value=False)
         self.watch_folder = ctk.StringVar()
         self.watch_folder_drop_hint = ctk.StringVar(value="폴더를 여기로 끌어다 놓거나 '폴더 선택' 버튼을 사용하세요.")
+        self.autostart_hint = ctk.StringVar(value="Windows 로그인 시 자동 실행 여부를 저장합니다.")
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
@@ -220,6 +234,7 @@ class MessengerDocsApp:
         
         # 설정 변수 변경 감지를 위한 추적
         self.first_run.trace_add("write", self.on_setting_changed)
+        self.launch_on_windows_startup.trace_add("write", self.on_setting_changed)
         self.watch_folder.trace_add("write", self.on_setting_changed)
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
@@ -1002,6 +1017,8 @@ class MessengerDocsApp:
                 "memory_usage": self.memory_usage,
                 "watch_folder": self.watch_folder,
                 "watch_folder_drop_hint": self.watch_folder_drop_hint,
+                "launch_on_windows_startup": self.launch_on_windows_startup,
+                "autostart_hint": self.autostart_hint,
                 "file_extensions": self.file_extensions,
                 "max_cache_size": self.max_cache_size,
                 "show_success_notifications": self.show_success_notifications,
@@ -1040,7 +1057,63 @@ class MessengerDocsApp:
         if hasattr(self, "log_text"):
             self.configure_log_tags(self.log_text)
         self.refresh_docs_target_ui()
+        self.update_windows_startup_ui_state()
         self.setup_watch_folder_drag_and_drop()
+
+    def update_windows_startup_ui_state(self):
+        """현재 플랫폼에 맞게 Windows 자동 실행 UI를 조정한다."""
+        autostart_supported = bool(
+            supports_windows_startup
+            and supports_windows_startup()
+            and is_windows_startup_enabled
+            and set_windows_startup_enabled
+        )
+
+        if autostart_supported:
+            self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 설정 저장 시 시작프로그램 폴더를 갱신합니다.")
+            if hasattr(self, "autostart_checkbox"):
+                self.autostart_checkbox.configure(state="normal")
+            return
+
+        self.autostart_hint.set("현재 OS에서는 Windows 자동 실행을 지원하지 않습니다.")
+        if hasattr(self, "autostart_checkbox"):
+            self.autostart_checkbox.configure(state="disabled")
+
+    def refresh_windows_startup_setting_from_system(self):
+        """Windows 실제 자동 실행 상태를 UI 설정값에 반영한다."""
+        autostart_supported = bool(
+            supports_windows_startup
+            and supports_windows_startup()
+            and is_windows_startup_enabled
+        )
+        if not autostart_supported:
+            return
+
+        try:
+            self.launch_on_windows_startup.set(is_windows_startup_enabled())
+        except Exception as error:
+            self.log(f"경고: Windows 자동 실행 상태 확인 실패 - {error}")
+
+    def sync_windows_startup_setting(self):
+        """저장된 UI 설정을 Windows 시작프로그램 폴더와 동기화한다."""
+        autostart_supported = bool(
+            supports_windows_startup
+            and supports_windows_startup()
+            and is_windows_startup_enabled
+            and set_windows_startup_enabled
+        )
+        if not autostart_supported:
+            return
+
+        desired_state = self.launch_on_windows_startup.get()
+        if desired_state:
+            set_windows_startup_enabled(True)
+            self.log("Windows 자동 실행 등록 완료.")
+            return
+
+        if is_windows_startup_enabled():
+            set_windows_startup_enabled(False)
+            self.log("Windows 자동 실행 해제 완료.")
 
     def setup_watch_folder_drag_and_drop(self):
         """감시 폴더 입력란에 드래그 앤 드롭을 연결한다."""
@@ -1528,6 +1601,15 @@ class MessengerDocsApp:
         try:
             save_app_config(config_data, config_path=CONFIG_FILE_STR)
             self.max_cache_size.set(str(config_data["max_cache_size"]))
+            try:
+                self.sync_windows_startup_setting()
+            except Exception as autostart_error:
+                self.log(f"경고: Windows 자동 실행 설정 적용 실패 - {autostart_error}")
+                messagebox.showwarning(
+                    "Windows 자동 실행",
+                    f"설정 파일은 저장되었지만 Windows 자동 실행 적용에는 실패했습니다.\n{autostart_error}",
+                    parent=self.root,
+                )
             self.log("설정 저장 완료.")
             self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
@@ -1536,6 +1618,7 @@ class MessengerDocsApp:
         """현재 UI 상태를 설정 딕셔너리로 변환한다."""
         return {
             "first_run": self.first_run.get(),
+            "launch_on_windows_startup": self.launch_on_windows_startup.get(),
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
@@ -1553,6 +1636,7 @@ class MessengerDocsApp:
         """설정 딕셔너리를 UI 상태에 반영한다."""
         normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
         self.first_run.set(normalized_config.get("first_run", True))
+        self.launch_on_windows_startup.set(normalized_config.get("launch_on_windows_startup", False))
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
         self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
@@ -1583,10 +1667,12 @@ class MessengerDocsApp:
                 self.log(f"레거시 설정 파일을 불러옵니다: {config_path}")
 
             if not config_found:
+                self.refresh_windows_startup_setting_from_system()
                 self.log("저장된 설정 파일 없음.")
                 return
 
             applied_config = self.apply_config_data(config_data)
+            self.refresh_windows_startup_setting_from_system()
             self.log(f"테마 설정 로드: {applied_config.get('appearance_mode', 'System')} 모드")
             self.log("저장된 설정 로드 완료.")
 
@@ -1772,6 +1858,7 @@ class MessengerDocsApp:
                         f"대상 문서: {docs_value or '미설정'}",
                         f"시작 시 도움말: {'표시' if self.show_help_on_startup.get() else '숨김'}",
                         f"성공 알림: {'표시' if self.show_success_notifications.get() else '숨김'}",
+                        f"Windows 자동 실행: {'사용' if self.launch_on_windows_startup.get() else '사용 안 함'}",
                     ]
                 )
             )
@@ -1984,6 +2071,17 @@ class MessengerDocsApp:
             offvalue=False,
             font=self.build_ui_font(12),
         ).pack(anchor="w", pady=4)
+        wizard_autostart_checkbox = ctk.CTkCheckBox(
+            step_three,
+            text="Windows 로그인 시 자동으로 실행",
+            variable=self.launch_on_windows_startup,
+            onvalue=True,
+            offvalue=False,
+            font=self.build_ui_font(12),
+        )
+        wizard_autostart_checkbox.pack(anchor="w", pady=4)
+        if not (supports_windows_startup and supports_windows_startup()):
+            wizard_autostart_checkbox.configure(state="disabled")
         ctk.CTkLabel(
             step_three,
             text="현재 설정 요약",
@@ -2042,6 +2140,7 @@ class MessengerDocsApp:
         wizard_trace_ids.append((self.docs_input, self.docs_input.trace_add("write", refresh_wizard_state)))
         wizard_trace_ids.append((self.show_help_on_startup, self.show_help_on_startup.trace_add("write", refresh_wizard_state)))
         wizard_trace_ids.append((self.show_success_notifications, self.show_success_notifications.trace_add("write", refresh_wizard_state)))
+        wizard_trace_ids.append((self.launch_on_windows_startup, self.launch_on_windows_startup.trace_add("write", refresh_wizard_state)))
 
         update_step()
         refresh_wizard_state()

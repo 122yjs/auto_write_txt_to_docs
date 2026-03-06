@@ -7,6 +7,7 @@ from src.auto_write_txt_to_docs.path_utils import CONFIG_FILE_STR, LEGACY_CONFIG
 
 CONFIG_DEFAULTS = {
     "first_run": True,
+    "launch_on_windows_startup": False,
     "watch_folder": "",
     "docs_input": "",
     "show_help_on_startup": True,
