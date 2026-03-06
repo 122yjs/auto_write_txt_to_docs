@@ -40,10 +40,6 @@ except ModuleNotFoundError:
     sys.modules["googleapiclient"] = googleapiclient_module
     sys.modules["googleapiclient.errors"] = googleapiclient_errors_module
 
-google_auth_stub = types.ModuleType("src.auto_write_txt_to_docs.google_auth")
-google_auth_stub.get_google_services = None
-sys.modules.setdefault("src.auto_write_txt_to_docs.google_auth", google_auth_stub)
-
 from src.auto_write_txt_to_docs import backend_processor
 
 

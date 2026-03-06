@@ -1,7 +1,79 @@
 import tempfile
+import types
 import unittest
 from pathlib import Path
+import sys
 from unittest.mock import patch
+
+try:
+    from google.auth.transport.requests import Request  # noqa: F401
+    from google.oauth2.credentials import Credentials  # noqa: F401
+    from google_auth_oauthlib.flow import InstalledAppFlow  # noqa: F401
+    from googleapiclient.discovery import build  # noqa: F401
+    from googleapiclient.errors import HttpError  # noqa: F401
+except ModuleNotFoundError:
+    google_module = types.ModuleType("google")
+    google_auth_module = types.ModuleType("google.auth")
+    google_auth_transport_module = types.ModuleType("google.auth.transport")
+    google_auth_requests_module = types.ModuleType("google.auth.transport.requests")
+    google_oauth2_module = types.ModuleType("google.oauth2")
+    google_oauth2_credentials_module = types.ModuleType("google.oauth2.credentials")
+    google_auth_oauthlib_module = types.ModuleType("google_auth_oauthlib")
+    google_auth_oauthlib_flow_module = types.ModuleType("google_auth_oauthlib.flow")
+    googleapiclient_module = types.ModuleType("googleapiclient")
+    googleapiclient_discovery_module = types.ModuleType("googleapiclient.discovery")
+    googleapiclient_errors_module = types.ModuleType("googleapiclient.errors")
+
+    class DummyRequest:
+        pass
+
+    class DummyCredentials:
+        valid = False
+        expired = False
+        refresh_token = None
+        client_id = None
+
+        @classmethod
+        def from_authorized_user_file(cls, *_args, **_kwargs):
+            return cls()
+
+        def refresh(self, _request):
+            self.valid = True
+
+        def to_json(self):
+            return "{}"
+
+    class DummyInstalledAppFlow:
+        @classmethod
+        def from_client_secrets_file(cls, *_args, **_kwargs):
+            return cls()
+
+        def run_local_server(self, port=0):
+            return DummyCredentials()
+
+    class DummyHttpError(Exception):
+        pass
+
+    def dummy_build(*_args, **_kwargs):
+        return object()
+
+    google_auth_requests_module.Request = DummyRequest
+    google_oauth2_credentials_module.Credentials = DummyCredentials
+    google_auth_oauthlib_flow_module.InstalledAppFlow = DummyInstalledAppFlow
+    googleapiclient_discovery_module.build = dummy_build
+    googleapiclient_errors_module.HttpError = DummyHttpError
+
+    sys.modules.setdefault("google", google_module)
+    sys.modules.setdefault("google.auth", google_auth_module)
+    sys.modules.setdefault("google.auth.transport", google_auth_transport_module)
+    sys.modules.setdefault("google.auth.transport.requests", google_auth_requests_module)
+    sys.modules.setdefault("google.oauth2", google_oauth2_module)
+    sys.modules.setdefault("google.oauth2.credentials", google_oauth2_credentials_module)
+    sys.modules.setdefault("google_auth_oauthlib", google_auth_oauthlib_module)
+    sys.modules.setdefault("google_auth_oauthlib.flow", google_auth_oauthlib_flow_module)
+    sys.modules.setdefault("googleapiclient", googleapiclient_module)
+    sys.modules.setdefault("googleapiclient.discovery", googleapiclient_discovery_module)
+    sys.modules.setdefault("googleapiclient.errors", googleapiclient_errors_module)
 
 from src.auto_write_txt_to_docs import google_auth
 

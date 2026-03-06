@@ -667,6 +667,35 @@ class MessengerDocsApp:
 
         return services
 
+    def verify_google_services_before_monitoring(self):
+        """감시 시작 전에 Google Docs 기록 가능 여부를 확인한다."""
+        if not get_google_services:
+            self.log("오류: Google 인증 모듈을 불러오지 못해 감시를 시작할 수 없습니다.")
+            self.update_status("⚠️ 기록 불가", "Google 인증 모듈 오류", tray_status_text="오류 상태")
+            messagebox.showerror(
+                "Google 연결 오류",
+                "Google 인증 모듈을 불러오지 못해 감시를 시작하지 않습니다.",
+                parent=self.root,
+            )
+            return None
+
+        self.log("감시 시작 전 Google Docs 연결 확인 중...")
+        self.update_status("Google 연결 확인 중...")
+        services = get_google_services(self.log)
+
+        if not services or 'docs' not in services:
+            self.log("오류: Google Docs 연결 확인 실패. 감시를 시작하지 않습니다.")
+            self.update_status("⚠️ 기록 불가", "Google 연결 실패", tray_status_text="오류 상태")
+            messagebox.showerror(
+                "Google 연결 오류",
+                "Google Docs 연결 확인에 실패하여 감시를 시작하지 않습니다.\n로그를 확인한 뒤 다시 시도하세요.",
+                parent=self.root,
+            )
+            return None
+
+        self.log("감시 시작 전 Google Docs 연결 확인 완료.")
+        return services
+
     def create_new_google_doc(self):
         """현재 권한 범위에서 새 Google Docs 문서를 만들고 자동으로 선택한다."""
         if not create_google_document:
@@ -820,13 +849,33 @@ class MessengerDocsApp:
             y = (selector_window.winfo_screenheight() // 2) - (height // 2)
             selector_window.geometry(f"{width}x{height}+{x}+{y}")
     
-    def update_status(self, status_text, detail_text=None):
+    def update_tray_status(self, tray_status_text, detail_text=None):
+        """트레이 툴팁에 현재 상태를 반영한다."""
+        if not self.tray_icon:
+            return
+
+        title_parts = ["메신저 Docs 자동 기록"]
+        if tray_status_text:
+            title_parts.append(str(tray_status_text).strip())
+        if detail_text:
+            compact_detail = str(detail_text).replace("\n", " ").strip()
+            if len(compact_detail) > 40:
+                compact_detail = compact_detail[:37] + "..."
+            title_parts.append(compact_detail)
+
+        try:
+            self.tray_icon.title = " · ".join(part for part in title_parts if part)
+        except Exception:
+            pass
+
+    def update_status(self, status_text, detail_text=None, tray_status_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
         if detail_text:
             full_status = f"{status_text} ({detail_text})"
         else:
             full_status = status_text
         self.status_var.set(full_status)
+        self.update_tray_status(tray_status_text or status_text, detail_text)
         self.root.update_idletasks()
 
     def create_widgets(self):
@@ -880,6 +929,7 @@ class MessengerDocsApp:
     def setup_tray_icon(self):
         menu = (pystray.MenuItem('보이기/숨기기', self.toggle_window), pystray.MenuItem('종료', self.exit_application))
         self.tray_icon = pystray.Icon("MessengerDocsApp", self.icon_image, "메신저 Docs 자동 기록", menu)
+        self.update_tray_status("준비")
 
     def run_tray_icon(self):
         if self.tray_icon: self.tray_icon.run()
@@ -1242,9 +1292,16 @@ class MessengerDocsApp:
                 
                 # 오류 메시지 처리 강화
                 error_detail = None
-                if "오류: Google API 인증 실패" in msg or "오류: Google 서비스 초기화 예외" in msg or "인증 정보(토큰) 갱신 실패" in msg:
+                if (
+                    "오류: Google API 인증 실패" in msg
+                    or "오류: Google 서비스 초기화 예외" in msg
+                    or "오류: Google 서비스 초기화 중 예외 발생" in msg
+                    or "오류: Google 서비스 로드 실패" in msg
+                    or "오류: Google 계정 인증 중 오류 발생" in msg
+                    or "인증 정보(토큰) 갱신 실패" in msg
+                ):
                     error_detail = "Google 인증 오류"
-                elif "오류: Docs 업데이트 API 오류" in msg:
+                elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
                     error_detail = "Docs API 오류"
                 elif "오류: 파일 처리 중 사라짐" in msg:
                     error_detail = "파일 접근 오류"
@@ -1254,7 +1311,10 @@ class MessengerDocsApp:
                     error_detail = "Google 연동 중 일반 오류"
 
                 if error_detail:
-                    self.update_status("오류 발생", error_detail)
+                    if error_detail in {"Google 인증 오류", "Docs API 오류", "Google 연동 중 일반 오류"}:
+                        self.update_status("⚠️ 기록 불가", error_detail, tray_status_text="오류 상태")
+                    else:
+                        self.update_status("오류 발생", error_detail, tray_status_text="오류 상태")
                     # 팝업은 한 번만 띄우거나, 특정 심각한 오류에만 띄우도록 조정 가능
                     try:
                         if "messagebox" not in msg.lower(): # 로그 자체에 messagebox 호출이 없는 경우만
@@ -1378,6 +1438,10 @@ class MessengerDocsApp:
             if save_confirm:
                 self.save_config()
                 self.log("감시 시작 전 설정 자동 저장됨.")
+
+        google_services = self.verify_google_services_before_monitoring()
+        if not google_services:
+            return
         
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
@@ -1404,7 +1468,10 @@ class MessengerDocsApp:
         self.monitoring_thread = threading.Thread(
             target=run_monitoring, 
             args=(current_config, self.log_threadsafe, self.stop_event),
-            kwargs={"extracted_result_callback": self.extracted_result_threadsafe},
+            kwargs={
+                "extracted_result_callback": self.extracted_result_threadsafe,
+                "preloaded_services": google_services,
+            },
             daemon=True
         )
         self.monitoring_thread.start()

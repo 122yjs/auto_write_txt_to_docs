@@ -642,7 +642,13 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
 
 
 # --- 메인 모니터링 함수 ---
-def run_monitoring(config, log_func_threadsafe, stop_event, extracted_result_callback=None):
+def run_monitoring(
+    config,
+    log_func_threadsafe,
+    stop_event,
+    extracted_result_callback=None,
+    preloaded_services=None,
+):
     """ 백그라운드에서 폴더 감시 및 파일 처리를 실행하는 메인 루프 """
     watch_folder = config.get('watch_folder')
     
@@ -659,9 +665,13 @@ def run_monitoring(config, log_func_threadsafe, stop_event, extracted_result_cal
     load_processed_state(log_func_threadsafe) # 처리 상태 로드
     backend_logger.info(f"처리 상태 로드 완료 - 추적 파일 수: {len(processed_file_states)}")
 
-    google_services = None
+    google_services = preloaded_services
+    if google_services and 'docs' in google_services:
+        log_func_threadsafe("백엔드: 감시 시작 전 확인된 Google Docs 서비스를 재사용합니다.")
+        backend_logger.info("사전 확인된 Google Docs 서비스 재사용")
+
     # Google API 서비스 로드 (Docs만 필수)
-    if get_google_services:
+    if not google_services and get_google_services:
         try:
             # get_google_services는 내부적으로 필요한 모든 서비스(Docs 포함)를 로드 시도할 수 있음
             # path_utils에서 자동으로 credentials 경로를 찾아서 사용
@@ -688,7 +698,7 @@ def run_monitoring(config, log_func_threadsafe, stop_event, extracted_result_cal
                         "인증 설정, 네트워크 연결 또는 API 할당량을 확인하세요."
             log_func_threadsafe(error_msg)
             backend_logger.error(f"Google 서비스 초기화 중 예외: {e}", exc_info=True)
-    else: # get_google_services 함수 자체가 없는 경우 (ImportError 등)
+    elif not google_services: # get_google_services 함수 자체가 없는 경우 (ImportError 등)
         log_func_threadsafe("경고: Google 연동 기능 비활성화됨 (google_auth 모듈 로드 실패).")
         backend_logger.warning("Google 연동 기능 비활성화 (google_auth 모듈 로드 실패).")
 

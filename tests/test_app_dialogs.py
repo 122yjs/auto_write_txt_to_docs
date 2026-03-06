@@ -11,6 +11,8 @@ class AppDialogsTests(unittest.TestCase):
         self.assertIn("기존 문서 주소 입력", help_text)
         self.assertIn("문서 목록", help_text)
         self.assertIn("Docs 웹에서 열기", help_text)
+        self.assertIn("문서의 끝에", help_text)
+        self.assertNotIn("문서의 맨 위", help_text)
 
     def test_get_error_solution_text_returns_specific_google_auth_guidance(self):
         solution = app_dialogs.get_error_solution_text("Google 인증 오류")
