@@ -167,6 +167,7 @@ class MessengerDocsApp:
         self.memory_check_interval = 10000  # 10초마다 메모리 사용량 확인
 
         # --- 변수 선언 ---
+        self.first_run = tk.BooleanVar(value=True)
         self.watch_folder = ctk.StringVar()
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
@@ -200,6 +201,7 @@ class MessengerDocsApp:
         self.setup_logging()
         
         # 설정 변수 변경 감지를 위한 추적
+        self.first_run.trace_add("write", self.on_setting_changed)
         self.watch_folder.trace_add("write", self.on_setting_changed)
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
@@ -265,6 +267,10 @@ class MessengerDocsApp:
 
     def run_startup_prompts(self):
         """메인 창이 그려진 뒤 초기 안내 대화상자를 순차적으로 표시한다."""
+        if self.first_run.get():
+            self.root.after(400, self.show_first_run_wizard)
+            return
+
         self.check_credentials_file()
         if self.show_help_on_startup.get():
             self.root.after(400, self.show_help_dialog)
@@ -1466,6 +1472,7 @@ class MessengerDocsApp:
     def get_current_config_data(self):
         """현재 UI 상태를 설정 딕셔너리로 변환한다."""
         return {
+            "first_run": self.first_run.get(),
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
@@ -1482,6 +1489,7 @@ class MessengerDocsApp:
     def apply_config_data(self, config_data):
         """설정 딕셔너리를 UI 상태에 반영한다."""
         normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
+        self.first_run.set(normalized_config.get("first_run", True))
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
         self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
@@ -1664,6 +1672,318 @@ class MessengerDocsApp:
             ctk_module=ctk,
             center_window_func=center_window,
         )
+
+    def show_first_run_wizard(self):
+        """처음 실행 시 단계별 설정 마법사를 표시한다."""
+        if hasattr(self, "first_run_wizard") and self.first_run_wizard and self.first_run_wizard.winfo_exists():
+            self.first_run_wizard.deiconify()
+            self.first_run_wizard.lift()
+            self.first_run_wizard.focus_force()
+            return
+
+        wizard = ctk.CTkToplevel(self.root)
+        wizard.title("처음 실행 설정 마법사")
+        wizard.geometry("760x540")
+        wizard.minsize(720, 500)
+        wizard.transient(self.root)
+        self.first_run_wizard = wizard
+
+        step_index = tk.IntVar(value=0)
+        step_frames = []
+        step_title_var = ctk.StringVar(value="")
+        step_desc_var = ctk.StringVar(value="")
+        folder_status_var = ctk.StringVar(value="")
+        docs_status_var = ctk.StringVar(value="")
+        summary_var = ctk.StringVar(value="")
+        wizard_trace_ids = []
+
+        def refresh_wizard_state(*_args):
+            watch_folder = self.watch_folder.get().strip()
+            docs_value = self.docs_input.get().strip()
+            folder_status_var.set(watch_folder or "아직 감시 폴더를 선택하지 않았습니다.")
+            docs_status_var.set(docs_value or "아직 대상 문서를 지정하지 않았습니다.")
+            summary_var.set(
+                "\n".join(
+                    [
+                        f"감시 폴더: {watch_folder or '미설정'}",
+                        f"대상 문서: {docs_value or '미설정'}",
+                        f"시작 시 도움말: {'표시' if self.show_help_on_startup.get() else '숨김'}",
+                        f"성공 알림: {'표시' if self.show_success_notifications.get() else '숨김'}",
+                    ]
+                )
+            )
+
+        def release_wizard_traces():
+            for variable, trace_id in wizard_trace_ids:
+                try:
+                    variable.trace_remove("write", trace_id)
+                except Exception:
+                    pass
+
+        def close_later():
+            release_wizard_traces()
+            self.log("첫 실행 설정 마법사를 나중에 다시 표시하도록 유지했습니다.")
+            self.first_run_wizard = None
+            wizard.destroy()
+
+        def finish_wizard():
+            release_wizard_traces()
+            self.first_run.set(False)
+            self.save_config()
+            self.log("첫 실행 설정 마법사 완료.")
+            self.first_run_wizard = None
+            wizard.destroy()
+
+        def update_step():
+            step_data = (
+                ("1. 감시 폴더 선택", "먼저 텍스트 파일이 쌓이는 폴더를 지정합니다. 이후 이 위치를 기준으로 자동 감시가 시작됩니다."),
+                ("2. Google Docs 연결", "기록할 문서를 정합니다. 새 문서를 만들거나, 기존 주소를 붙여넣거나, 접근 가능한 목록에서 선택할 수 있습니다."),
+                ("3. 알림 및 마무리", "처음 실행 후 보여줄 안내와 성공 알림 여부를 고르고 설정을 저장합니다."),
+            )
+            current_step = step_index.get()
+            step_title_var.set(step_data[current_step][0])
+            step_desc_var.set(step_data[current_step][1])
+
+            for index, frame in enumerate(step_frames):
+                if index == current_step:
+                    frame.pack(fill="both", expand=True, pady=(12, 0))
+                else:
+                    frame.pack_forget()
+
+            back_button.configure(state="normal" if current_step > 0 else "disabled")
+            next_button.configure(text="완료" if current_step == len(step_frames) - 1 else "다음")
+            refresh_wizard_state()
+
+        def go_back():
+            if step_index.get() > 0:
+                step_index.set(step_index.get() - 1)
+                update_step()
+
+        def go_next():
+            if step_index.get() >= len(step_frames) - 1:
+                finish_wizard()
+                return
+            step_index.set(step_index.get() + 1)
+            update_step()
+
+        wizard.protocol("WM_DELETE_WINDOW", close_later)
+
+        container = ctk.CTkFrame(wizard)
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        header_frame = ctk.CTkFrame(container, corner_radius=14)
+        header_frame.pack(fill="x")
+
+        ctk.CTkLabel(
+            header_frame,
+            text="Messenger Docs 시작 마법사",
+            font=self.build_ui_font(19, "bold"),
+        ).pack(anchor="w", padx=18, pady=(16, 4))
+
+        ctk.CTkLabel(
+            header_frame,
+            textvariable=step_title_var,
+            font=self.build_ui_font(16, "bold"),
+            text_color=("#1A73E8", "#8AB4F8"),
+        ).pack(anchor="w", padx=18)
+
+        ctk.CTkLabel(
+            header_frame,
+            textvariable=step_desc_var,
+            justify="left",
+            wraplength=660,
+            font=self.build_ui_font(12),
+            text_color=("gray40", "gray72"),
+        ).pack(anchor="w", fill="x", padx=18, pady=(6, 16))
+
+        body_frame = ctk.CTkFrame(container, corner_radius=14)
+        body_frame.pack(fill="both", expand=True, pady=(14, 0))
+
+        step_one = ctk.CTkFrame(body_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            step_one,
+            text="감시할 폴더를 먼저 선택하세요.",
+            font=self.build_ui_font(14, "bold"),
+        ).pack(anchor="w", pady=(6, 10))
+        ctk.CTkLabel(
+            step_one,
+            text="현재 선택",
+            font=self.build_ui_font(12, "bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            step_one,
+            textvariable=folder_status_var,
+            justify="left",
+            wraplength=640,
+            font=self.build_ui_font(12),
+            text_color=("gray40", "gray72"),
+        ).pack(anchor="w", pady=(4, 14))
+        ctk.CTkButton(
+            step_one,
+            text="감시 폴더 선택",
+            width=140,
+            height=38,
+            command=self.browse_folder,
+            font=self.build_ui_font(12, "bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            step_one,
+            text="이 단계는 필수는 아니지만, 나중에 감시 시작 전에 반드시 지정해야 합니다.",
+            font=self.build_ui_font(12),
+            text_color=("gray45", "gray72"),
+        ).pack(anchor="w", pady=(12, 0))
+
+        step_two = ctk.CTkFrame(body_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            step_two,
+            text="Google 인증과 대상 문서 선택을 순서대로 진행하세요.",
+            font=self.build_ui_font(14, "bold"),
+        ).pack(anchor="w", pady=(6, 10))
+        ctk.CTkLabel(
+            step_two,
+            text="현재 문서 상태",
+            font=self.build_ui_font(12, "bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            step_two,
+            textvariable=docs_status_var,
+            justify="left",
+            wraplength=640,
+            font=self.build_ui_font(12),
+            text_color=("gray40", "gray72"),
+        ).pack(anchor="w", pady=(4, 14))
+
+        step_two_buttons = ctk.CTkFrame(step_two, fg_color="transparent")
+        step_two_buttons.pack(anchor="w", pady=(0, 10))
+        ctk.CTkButton(
+            step_two_buttons,
+            text="Google 인증 설정",
+            width=150,
+            height=38,
+            command=self.show_credentials_wizard,
+            font=self.build_ui_font(12, "bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            step_two_buttons,
+            text="새 문서 만들기",
+            width=126,
+            height=38,
+            command=self.create_new_google_doc,
+            font=self.build_ui_font(12, "bold"),
+            fg_color="#0F9D58",
+            hover_color="#0B8043",
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            step_two_buttons,
+            text="문서 목록",
+            width=96,
+            height=38,
+            command=self.select_google_doc,
+            font=self.build_ui_font(12, "bold"),
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            step_two,
+            text="기존 문서 주소 직접 입력",
+            width=188,
+            height=38,
+            command=self.focus_existing_docs_input,
+            font=self.build_ui_font(12, "bold"),
+            fg_color=("gray85", "gray28"),
+            hover_color=("gray78", "gray34"),
+            text_color=("gray20", "gray92"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            step_two,
+            text="문서를 나중에 지정해도 되지만, 감시를 시작하기 전에는 대상 문서가 필요합니다.",
+            font=self.build_ui_font(12),
+            text_color=("gray45", "gray72"),
+        ).pack(anchor="w", pady=(12, 0))
+
+        step_three = ctk.CTkFrame(body_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            step_three,
+            text="기본 동작을 확인하고 저장합니다.",
+            font=self.build_ui_font(14, "bold"),
+        ).pack(anchor="w", pady=(6, 10))
+        ctk.CTkCheckBox(
+            step_three,
+            text="프로그램 시작 시 도움말 표시",
+            variable=self.show_help_on_startup,
+            onvalue=True,
+            offvalue=False,
+            font=self.build_ui_font(12),
+        ).pack(anchor="w", pady=4)
+        ctk.CTkCheckBox(
+            step_three,
+            text="Google Docs 기록 성공 시 트레이 알림 표시",
+            variable=self.show_success_notifications,
+            onvalue=True,
+            offvalue=False,
+            font=self.build_ui_font(12),
+        ).pack(anchor="w", pady=4)
+        ctk.CTkLabel(
+            step_three,
+            text="현재 설정 요약",
+            font=self.build_ui_font(12, "bold"),
+        ).pack(anchor="w", pady=(18, 6))
+        ctk.CTkLabel(
+            step_three,
+            textvariable=summary_var,
+            justify="left",
+            wraplength=640,
+            font=self.build_ui_font(12),
+            text_color=("gray40", "gray72"),
+        ).pack(anchor="w")
+
+        step_frames.extend((step_one, step_two, step_three))
+
+        footer_frame = ctk.CTkFrame(container, fg_color="transparent")
+        footer_frame.pack(fill="x", pady=(14, 0))
+
+        ctk.CTkButton(
+            footer_frame,
+            text="나중에",
+            width=92,
+            height=38,
+            command=close_later,
+            font=self.build_ui_font(12, "bold"),
+            fg_color=("gray85", "gray28"),
+            hover_color=("gray78", "gray34"),
+            text_color=("gray20", "gray92"),
+        ).pack(side="left")
+
+        back_button = ctk.CTkButton(
+            footer_frame,
+            text="이전",
+            width=92,
+            height=38,
+            command=go_back,
+            font=self.build_ui_font(12, "bold"),
+            fg_color=("gray85", "gray28"),
+            hover_color=("gray78", "gray34"),
+            text_color=("gray20", "gray92"),
+        )
+        back_button.pack(side="right")
+
+        next_button = ctk.CTkButton(
+            footer_frame,
+            text="다음",
+            width=92,
+            height=38,
+            command=go_next,
+            font=self.build_ui_font(12, "bold"),
+        )
+        next_button.pack(side="right", padx=(0, 8))
+
+        wizard_trace_ids.append((self.watch_folder, self.watch_folder.trace_add("write", refresh_wizard_state)))
+        wizard_trace_ids.append((self.docs_input, self.docs_input.trace_add("write", refresh_wizard_state)))
+        wizard_trace_ids.append((self.show_help_on_startup, self.show_help_on_startup.trace_add("write", refresh_wizard_state)))
+        wizard_trace_ids.append((self.show_success_notifications, self.show_success_notifications.trace_add("write", refresh_wizard_state)))
+
+        update_step()
+        refresh_wizard_state()
+        if center_window:
+            center_window(wizard)
 
     def show_enhanced_error_dialog(self, error_type, error_message):
         """
