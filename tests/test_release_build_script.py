@@ -14,6 +14,7 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         self.assertIn('"$AssetSource;assets"', self.script_source)
         self.assertIn("--collect-all", self.script_source)
         self.assertIn("customtkinter", self.script_source)
+        self.assertIn("tkinterdnd2", self.script_source)
         self.assertIn("--collect-submodules", self.script_source)
         self.assertIn("googleapiclient", self.script_source)
         self.assertIn("google_auth_oauthlib", self.script_source)

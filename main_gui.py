@@ -22,6 +22,12 @@ from pathlib import Path
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
 import pystray
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:
+    DND_FILES = None
+    TkinterDnD = None
+
 # backend_processor 임포트
 try:
     # Docs 기록 기능 버전의 backend_processor 임포트
@@ -105,6 +111,17 @@ except ImportError:
     show_help_dialog_window = None
     show_theme_settings_dialog = None
 
+
+if TkinterDnD:
+    class DnDCompatibleTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        """customtkinter 루트에 tkinterdnd2 지원을 결합한다."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
+else:
+    DnDCompatibleTk = ctk.CTk
+
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
     """ Google Docs URL에서 ID 추출 """
@@ -169,6 +186,7 @@ class MessengerDocsApp:
         # --- 변수 선언 ---
         self.first_run = tk.BooleanVar(value=True)
         self.watch_folder = ctk.StringVar()
+        self.watch_folder_drop_hint = ctk.StringVar(value="폴더를 여기로 끌어다 놓거나 '폴더 선택' 버튼을 사용하세요.")
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
@@ -983,6 +1001,7 @@ class MessengerDocsApp:
                 "status_var": self.status_var,
                 "memory_usage": self.memory_usage,
                 "watch_folder": self.watch_folder,
+                "watch_folder_drop_hint": self.watch_folder_drop_hint,
                 "file_extensions": self.file_extensions,
                 "max_cache_size": self.max_cache_size,
                 "show_success_notifications": self.show_success_notifications,
@@ -1021,6 +1040,50 @@ class MessengerDocsApp:
         if hasattr(self, "log_text"):
             self.configure_log_tags(self.log_text)
         self.refresh_docs_target_ui()
+        self.setup_watch_folder_drag_and_drop()
+
+    def setup_watch_folder_drag_and_drop(self):
+        """감시 폴더 입력란에 드래그 앤 드롭을 연결한다."""
+        if not hasattr(self, "watch_folder_drop_hint"):
+            return
+
+        if not DND_FILES or not hasattr(self, "watch_folder_entry"):
+            self.watch_folder_drop_hint.set("드래그 앤 드롭을 사용하려면 tkinterdnd2 설치가 필요합니다. 없으면 '폴더 선택' 버튼을 사용하세요.")
+            return
+
+        try:
+            self.watch_folder_entry.drop_target_register(DND_FILES)
+            self.watch_folder_entry.dnd_bind("<<Drop>>", self.on_watch_folder_drop)
+            self.watch_folder_drop_hint.set("폴더를 여기로 끌어다 놓거나 '폴더 선택' 버튼을 사용하세요.")
+            self.log("감시 폴더 드래그 앤 드롭이 준비되었습니다.")
+        except Exception as error:
+            self.watch_folder_drop_hint.set("드래그 앤 드롭 초기화에 실패했습니다. '폴더 선택' 버튼을 사용하세요.")
+            self.log(f"경고: 감시 폴더 드래그 앤 드롭 초기화 실패 - {error}")
+
+    def on_watch_folder_drop(self, event):
+        """드롭된 폴더 경로를 감시 폴더 입력값에 반영한다."""
+        if not event or not getattr(event, "data", ""):
+            return
+
+        try:
+            dropped_items = self.root.tk.splitlist(event.data)
+        except tk.TclError:
+            dropped_items = [str(event.data)]
+
+        if not dropped_items:
+            return
+
+        dropped_path = str(dropped_items[0]).strip()
+        if not dropped_path:
+            return
+
+        if os.path.isdir(dropped_path):
+            self.watch_folder.set(dropped_path)
+            self.log(f"감시 폴더 드래그 앤 드롭 설정됨: {dropped_path}")
+            return
+
+        self.log(f"경고: 드래그 앤 드롭된 경로가 폴더가 아닙니다 - {dropped_path}")
+        messagebox.showwarning("폴더 선택 오류", "감시 폴더로 사용할 디렉터리를 끌어다 놓아주세요.", parent=self.root)
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
     def build_tray_menu(self):
@@ -2588,7 +2651,7 @@ class MessengerDocsApp:
 # --- 애플리케이션 실행 ---
 def main():
     """GUI 애플리케이션 진입점."""
-    root = ctk.CTk()
+    root = DnDCompatibleTk()
     MessengerDocsApp(root)
     root.mainloop()
 
