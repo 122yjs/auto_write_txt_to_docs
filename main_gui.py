@@ -1017,8 +1017,18 @@ class MessengerDocsApp:
         self.refresh_docs_target_ui()
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
+    def build_tray_menu(self):
+        """트레이 우클릭 메뉴를 구성한다."""
+        return (
+            pystray.MenuItem('보이기/숨기기', self.toggle_window),
+            pystray.MenuItem('감시 일시 정지/재개', self.toggle_monitoring_from_tray),
+            pystray.MenuItem('Docs 웹에서 열기', self.open_docs_in_browser_from_tray),
+            pystray.MenuItem('로그 보기', self.show_log_popup_from_tray),
+            pystray.MenuItem('종료', self.exit_application),
+        )
+
     def setup_tray_icon(self):
-        menu = (pystray.MenuItem('보이기/숨기기', self.toggle_window), pystray.MenuItem('종료', self.exit_application))
+        menu = self.build_tray_menu()
         self.tray_icon = pystray.Icon("MessengerDocsApp", self.icon_image, "메신저 Docs 자동 기록", menu)
         self.update_tray_status("준비")
 
@@ -1059,6 +1069,27 @@ class MessengerDocsApp:
         else:
             self.log("트레이 아이콘이 초기화되지 않아 알림을 표시할 수 없습니다.")
 
+    def toggle_monitoring_from_tray(self, *args):
+        """트레이 메뉴에서 감시를 일시 정지하거나 재개한다."""
+        if not hasattr(self, "root") or not self.root.winfo_exists():
+            return
+        if self.is_monitoring:
+            self.root.after(0, self.stop_monitoring)
+        else:
+            self.root.after(0, self.start_monitoring)
+
+    def open_docs_in_browser_from_tray(self, *args):
+        """트레이 메뉴에서 현재 Docs 문서를 연다."""
+        if hasattr(self, "root") and self.root.winfo_exists():
+            self.root.after(0, self.open_docs_in_browser)
+
+    def show_log_popup_from_tray(self, *args):
+        """트레이 메뉴에서 로그 팝업을 연다."""
+        if not hasattr(self, "root") or not self.root.winfo_exists():
+            return
+        self.root.after(0, self.show_window)
+        self.root.after(0, self.show_log_popup)
+
     def hide_window(self): # X 버튼 클릭 시 호출됨
         """ 메인 창 숨기기 """
         if not self.tray_icon:
@@ -1073,13 +1104,13 @@ class MessengerDocsApp:
         self.root.deiconify(); self.root.lift(); self.root.focus_force()
         self.log("창 보임.")
 
-    def toggle_window(self): # 트레이 메뉴에서 호출됨
+    def toggle_window(self, *args): # 트레이 메뉴에서 호출됨
         """ 창 보이기/숨기기 토글 """
         if self.root.winfo_exists(): # 창 존재 확인
             if self.root.state() == 'withdrawn': self.root.after(0, self.show_window)
             else: self.root.after(0, self.hide_window)
 
-    def exit_application(self): # 트레이 메뉴 '종료'에서 호출됨
+    def exit_application(self, *args): # 트레이 메뉴 '종료'에서 호출됨
         """ 애플리케이션 완전 종료 """
         self.log("애플리케이션 종료 시작...")
         
