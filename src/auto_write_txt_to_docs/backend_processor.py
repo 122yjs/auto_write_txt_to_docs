@@ -41,7 +41,8 @@ processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트
 file_encodings = {}  # 파일별 성공한 인코딩 저장
 PROCESSING_DELAY = 1.0
 RETRY_DELAY = 5.0
-MAX_GLOBAL_CACHE_SIZE = 10000
+DEFAULT_MAX_GLOBAL_CACHE_SIZE = 10000
+MAX_GLOBAL_CACHE_SIZE = DEFAULT_MAX_GLOBAL_CACHE_SIZE
 
 # 로깅 설정
 def setup_backend_logging():
@@ -76,6 +77,31 @@ def setup_backend_logging():
 added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
 LINE_CACHE_FILE = CACHE_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
+
+
+def configure_max_global_cache_size(config, log_func=None):
+    """실행 중 사용할 전역 라인 캐시 최대 크기를 설정합니다."""
+    global MAX_GLOBAL_CACHE_SIZE
+
+    requested_size = DEFAULT_MAX_GLOBAL_CACHE_SIZE
+    if isinstance(config, dict):
+        requested_size = config.get('max_cache_size', DEFAULT_MAX_GLOBAL_CACHE_SIZE)
+
+    try:
+        resolved_size = int(str(requested_size).strip())
+        if resolved_size <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        resolved_size = DEFAULT_MAX_GLOBAL_CACHE_SIZE
+        if log_func:
+            log_func(
+                f"경고: 유효하지 않은 라인 캐시 크기 설정({requested_size})입니다. 기본값 {DEFAULT_MAX_GLOBAL_CACHE_SIZE}을 사용합니다."
+            )
+
+    MAX_GLOBAL_CACHE_SIZE = resolved_size
+    if log_func:
+        log_func(f"백엔드: 라인 캐시 최대 크기 설정 - {MAX_GLOBAL_CACHE_SIZE}개")
+    return MAX_GLOBAL_CACHE_SIZE
 
 
 def build_extraction_record(filepath, extracted_lines, extracted_at=None):
@@ -625,6 +651,8 @@ def run_monitoring(config, log_func_threadsafe, stop_event, extracted_result_cal
     backend_logger.info(f"감시 시작 - 폴더: {watch_folder}")
     
     log_func_threadsafe(f"백엔드: 감시 시작 - 폴더: {watch_folder}")
+    resolved_max_cache_size = configure_max_global_cache_size(config, log_func_threadsafe)
+    backend_logger.info(f"라인 캐시 최대 크기 적용 완료: {resolved_max_cache_size}")
 
     load_line_cache(log_func_threadsafe) # 라인 캐시 로드
     backend_logger.info(f"라인 캐시 로드 완료 - 캐시된 라인 수: {len(added_lines_cache)}")

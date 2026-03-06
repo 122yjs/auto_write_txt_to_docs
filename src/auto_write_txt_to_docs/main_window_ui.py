@@ -8,9 +8,15 @@ def _resolve_ctk(ctk_module=None):
     return ctk
 
 
-def _font(ctk, size, weight="normal", family="Malgun Gothic"):
-    """고딕 계열 폰트를 공통 생성한다."""
-    return ctk.CTkFont(family=family, size=size, weight=weight)
+def _font(ctk, size, weight="normal", family=None):
+    """플랫폼별 기본 UI 폰트 또는 지정 폰트를 생성한다."""
+    font_kwargs = {
+        "size": size,
+        "weight": weight,
+    }
+    if family:
+        font_kwargs["family"] = family
+    return ctk.CTkFont(**font_kwargs)
 
 
 def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
@@ -116,6 +122,10 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     """중앙 작업 설정 패널을 생성한다."""
     settings_frame = ctk.CTkFrame(parent, corner_radius=14)
     settings_frame.pack(fill="x", pady=(0, 14))
+    validate_command = (
+        settings_frame.register(callbacks["validate_positive_integer_input"]),
+        "%P",
+    )
 
     title_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
     title_frame.pack(fill="x", padx=18, pady=(16, 6))
@@ -209,6 +219,32 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         command=callbacks["show_filter_settings"],
         font=_font(ctk, 12, "bold", family=font_family),
     ).pack(side="right")
+
+    max_cache_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    max_cache_row.pack(fill="x", padx=18, pady=6)
+    ctk.CTkLabel(
+        max_cache_row,
+        text="라인 캐시 크기",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    max_cache_size_entry = ctk.CTkEntry(
+        max_cache_row,
+        textvariable=state_vars["max_cache_size"],
+        width=130,
+        height=36,
+        font=_font(ctk, 13, family=font_family),
+        validate="key",
+        validatecommand=validate_command,
+    )
+    max_cache_size_entry.pack(side="left", padx=4)
+    ctk.CTkLabel(
+        max_cache_row,
+        text="중복 비교용 전역 라인 캐시에 유지할 최대 항목 수",
+        font=_font(ctk, 12, family=font_family),
+        text_color=("gray45", "gray72"),
+    ).pack(side="left", padx=(8, 0))
 
     doc_title_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     doc_title_row.pack(fill="x", padx=18, pady=(10, 4))
@@ -310,6 +346,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
 
     return {
         "settings_frame": settings_frame,
+        "max_cache_size_entry": max_cache_size_entry,
         "docs_input_entry": docs_input_entry,
         "create_doc_button": create_doc_button,
         "manual_doc_input_button": manual_doc_input_button,
@@ -568,7 +605,7 @@ def _build_result_panel(ctk, parent, callbacks, font_family):
     }
 
 
-def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_family="Malgun Gothic"):
+def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_family=None):
     """메인 창 UI를 생성하고 필요한 위젯 참조를 반환한다."""
     ctk = _resolve_ctk(ctk_module)
 

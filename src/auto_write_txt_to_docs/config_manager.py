@@ -13,6 +13,7 @@ CONFIG_DEFAULTS = {
     "use_regex_filter": False,
     "regex_pattern": "",
     "appearance_mode": "System",
+    "max_cache_size": 10000,
 }
 
 BACKUP_VERSION = "1.0"
@@ -30,6 +31,15 @@ def normalize_config_data(config_data):
         for key in normalized_config:
             if key in config_data:
                 normalized_config[key] = config_data[key]
+
+    try:
+        max_cache_size = int(str(normalized_config["max_cache_size"]).strip())
+        if max_cache_size <= 0:
+            raise ValueError
+        normalized_config["max_cache_size"] = max_cache_size
+    except (TypeError, ValueError):
+        normalized_config["max_cache_size"] = CONFIG_DEFAULTS["max_cache_size"]
+
     return normalized_config
 
 

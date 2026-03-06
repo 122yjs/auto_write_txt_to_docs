@@ -2,6 +2,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import font as tkfont
 import os
 import json
 import threading
@@ -124,10 +125,31 @@ def format_google_modified_time(modified_time_text):
     except ValueError:
         return modified_time_text
 
+
+def detect_ui_font_family(root):
+    """현재 플랫폼에서 사용 가능한 한글 친화 UI 폰트를 선택한다."""
+    platform_candidates = {
+        "Windows": ("Malgun Gothic", "맑은 고딕", "Segoe UI"),
+        "Darwin": ("Apple SD Gothic Neo", "AppleGothic", "Arial Unicode MS"),
+        "Linux": ("Noto Sans CJK KR", "Noto Sans KR", "Noto Sans", "Arial Unicode MS"),
+    }
+
+    try:
+        available_families = {str(name) for name in tkfont.families(root)}
+    except tk.TclError:
+        return None
+
+    for candidate in platform_candidates.get(platform.system(), ()):
+        if candidate in available_families:
+            return candidate
+
+    return None
+
 class MessengerDocsApp:
     def __init__(self, root):
         self.root = root
         self.root.title("메신저 Docs 자동 기록 (트레이)")
+        self.ui_font_family = detect_ui_font_family(self.root)
         # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
         self.root.geometry("900x750")
         self.root.minsize(900, 750)
@@ -155,6 +177,7 @@ class MessengerDocsApp:
         self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
         self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
         self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
+        self.max_cache_size = ctk.StringVar(value="10000")
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -175,9 +198,10 @@ class MessengerDocsApp:
         self.setup_logging()
         
         # 설정 변수 변경 감지를 위한 추적
-        self.watch_folder.trace('w', self.on_setting_changed)
-        self.docs_input.trace('w', self.on_setting_changed)
-        self.show_help_on_startup.trace('w', self.on_setting_changed)
+        self.watch_folder.trace_add("write", self.on_setting_changed)
+        self.docs_input.trace_add("write", self.on_setting_changed)
+        self.show_help_on_startup.trace_add("write", self.on_setting_changed)
+        self.max_cache_size.trace_add("write", self.on_setting_changed)
         self.settings_changed = False
 
         # --- 아이콘 이미지 생성 또는 로드 ---
@@ -189,6 +213,7 @@ class MessengerDocsApp:
         # --- 설정 로드 ---
         self.load_config()
         self.settings_changed = False  # 로드 후 변경 플래그 초기화
+        self.root.after(50, self.present_main_window)
 
         # --- 로그 큐 처리 ---
         self.root.after(100, self.process_log_queue)
@@ -203,7 +228,7 @@ class MessengerDocsApp:
         # --- 트레이 아이콘 설정 및 시작 ---
         if self.icon_image: # 아이콘 준비 완료 시
             self.setup_tray_icon()
-            self.start_tray_thread()
+            self.start_tray_icon()
         else:
              self.log("오류: 아이콘 이미지를 준비할 수 없어 트레이 기능을 시작할 수 없습니다.")
         
@@ -211,12 +236,35 @@ class MessengerDocsApp:
         self.log("애플리케이션 초기화 완료.")
         self.log("설정을 확인하고 '감시 시작' 버튼을 클릭하세요.")
 
-        # --- 인증 파일 확인 ---
+        # --- 초기 안내/검사 대화상자는 메인 창 표시 후 실행 ---
+        self.root.after(250, self.run_startup_prompts)
+
+    def build_ui_font(self, size, weight="normal"):
+        """현재 플랫폼에 맞는 UI 폰트를 생성한다."""
+        font_kwargs = {
+            "size": size,
+            "weight": weight,
+        }
+        if self.ui_font_family:
+            font_kwargs["family"] = self.ui_font_family
+        return ctk.CTkFont(**font_kwargs)
+
+    def present_main_window(self):
+        """메인 창을 화면 중앙에 배치하고 전면으로 올린다."""
+        if center_window:
+            center_window(self.root)
+        self.root.deiconify()
+        self.root.lift()
+        try:
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def run_startup_prompts(self):
+        """메인 창이 그려진 뒤 초기 안내 대화상자를 순차적으로 표시한다."""
         self.check_credentials_file()
-        
-        # --- 도움말 표시 (설정에 따라) ---
         if self.show_help_on_startup.get():
-            self.root.after(800, self.show_help_dialog)  # 0.8초 후 도움말 표시
+            self.root.after(400, self.show_help_dialog)
 
 
     def check_credentials_file(self):
@@ -465,6 +513,33 @@ class MessengerDocsApp:
             return
 
         self.lock_docs_target(source_label="직접 입력")
+
+    def validate_positive_integer_input(self, proposed_value):
+        """캐시 크기 입력란에서 숫자만 허용한다."""
+        return proposed_value == "" or proposed_value.isdigit()
+
+    def parse_max_cache_size(self, fallback=None):
+        """현재 캐시 크기 입력값을 정수로 변환한다."""
+        raw_value = self.max_cache_size.get().strip()
+
+        if not raw_value:
+            if fallback is not None:
+                return fallback
+            raise ValueError("라인 캐시 크기를 입력해주세요.")
+
+        try:
+            parsed_value = int(raw_value)
+        except ValueError as error:
+            if fallback is not None:
+                return fallback
+            raise ValueError("라인 캐시 크기는 숫자만 입력할 수 있습니다.") from error
+
+        if parsed_value <= 0:
+            if fallback is not None:
+                return fallback
+            raise ValueError("라인 캐시 크기는 1 이상의 정수여야 합니다.")
+
+        return parsed_value
     
     def validate_inputs(self):
         """입력값 유효성 검사"""
@@ -492,6 +567,11 @@ class MessengerDocsApp:
                 errors.append("유효한 Google Docs URL 또는 ID를 입력해주세요.")
             elif not self.docs_target_locked.get():
                 errors.append("대상 문서를 확정하려면 '문서 경로 확정' 버튼을 눌러주세요.")
+
+        try:
+            self.parse_max_cache_size()
+        except ValueError as error:
+            errors.append(str(error))
         
         return errors
     
@@ -761,6 +841,7 @@ class MessengerDocsApp:
                 "memory_usage": self.memory_usage,
                 "watch_folder": self.watch_folder,
                 "file_extensions": self.file_extensions,
+                "max_cache_size": self.max_cache_size,
                 "docs_input": self.docs_input,
                 "docs_target_status_var": self.docs_target_status_var,
             },
@@ -784,9 +865,10 @@ class MessengerDocsApp:
                 "show_log_popup": self.show_log_popup,
                 "show_log_search_dialog": self.show_log_search_dialog,
                 "clear_log": self.clear_log,
+                "validate_positive_integer_input": self.validate_positive_integer_input,
             },
             ctk_module=ctk,
-            font_family="Malgun Gothic",
+            font_family=self.ui_font_family,
         )
 
         for widget_name, widget_value in widget_refs.items():
@@ -801,6 +883,22 @@ class MessengerDocsApp:
 
     def run_tray_icon(self):
         if self.tray_icon: self.tray_icon.run()
+
+    def start_tray_icon(self):
+        """플랫폼에 맞는 방식으로 트레이 아이콘 이벤트 루프를 시작한다."""
+        if not self.tray_icon:
+            return
+
+        if platform.system() == "Darwin":
+            try:
+                self.tray_icon.run_detached()
+                self.log("macOS 트레이 아이콘 분리 모드 시작됨.")
+            except Exception as e:
+                self.log(f"macOS 트레이 아이콘 시작 실패: {e}")
+                self.tray_icon = None
+            return
+
+        self.start_tray_thread()
 
     def start_tray_thread(self):
         if self.tray_icon and not self.tray_thread:
@@ -822,6 +920,10 @@ class MessengerDocsApp:
 
     def hide_window(self): # X 버튼 클릭 시 호출됨
         """ 메인 창 숨기기 """
+        if not self.tray_icon:
+            self.log("트레이 아이콘이 없어 창 숨김 대신 종료를 진행합니다.")
+            self.exit_application()
+            return
         self.root.withdraw()
         self.log("창 숨김. 트레이 아이콘 우클릭으로 메뉴 사용.")
 
@@ -946,12 +1048,12 @@ class MessengerDocsApp:
         ctk.CTkLabel(
             main_frame,
             text="작업 로그",
-            font=ctk.CTkFont(family="Malgun Gothic", size=17, weight="bold"),
+            font=self.build_ui_font(17, "bold"),
         ).pack(anchor="w")
         ctk.CTkLabel(
             main_frame,
             text="기본 창이 좁을 때도 로그를 넓게 확인할 수 있는 별도 창입니다.",
-            font=ctk.CTkFont(family="Malgun Gothic", size=12),
+            font=self.build_ui_font(12),
             text_color=("gray40", "gray70"),
         ).pack(anchor="w", pady=(4, 10))
 
@@ -965,7 +1067,7 @@ class MessengerDocsApp:
             height=34,
             corner_radius=10,
             command=self.clear_log,
-            font=ctk.CTkFont(family="Malgun Gothic", size=12, weight="bold"),
+            font=self.build_ui_font(12, "bold"),
             fg_color=("gray85", "gray28"),
             hover_color=("gray78", "gray34"),
             text_color=("gray20", "gray92"),
@@ -978,14 +1080,14 @@ class MessengerDocsApp:
             height=34,
             corner_radius=10,
             command=self.close_log_popup,
-            font=ctk.CTkFont(family="Malgun Gothic", size=12, weight="bold"),
+            font=self.build_ui_font(12, "bold"),
         ).pack(side="right", padx=(0, 8))
 
         self.log_popup_text = ctk.CTkTextbox(
             main_frame,
             state="disabled",
             wrap="word",
-            font=ctk.CTkFont(family="Malgun Gothic", size=12),
+            font=self.build_ui_font(12),
             corner_radius=12,
         )
         self.log_popup_text.pack(fill="both", expand=True)
@@ -1188,6 +1290,7 @@ class MessengerDocsApp:
         config_data = self.get_current_config_data()
         try:
             save_app_config(config_data, config_path=CONFIG_FILE_STR)
+            self.max_cache_size.set(str(config_data["max_cache_size"]))
             self.log("설정 저장 완료.")
             self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
@@ -1203,7 +1306,8 @@ class MessengerDocsApp:
             "use_regex_filter": self.use_regex_filter.get(),
             "regex_pattern": self.regex_pattern.get(),
             # 테마 설정 추가
-            "appearance_mode": self.appearance_mode.get()
+            "appearance_mode": self.appearance_mode.get(),
+            "max_cache_size": self.parse_max_cache_size(fallback=10000),
         }
 
     def apply_config_data(self, config_data):
@@ -1216,6 +1320,7 @@ class MessengerDocsApp:
         self.file_extensions.set(normalized_config.get("file_extensions", ".txt"))
         self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
         self.regex_pattern.set(normalized_config.get("regex_pattern", ""))
+        self.max_cache_size.set(str(normalized_config.get("max_cache_size", 10000)))
 
         appearance_mode = normalized_config.get("appearance_mode", "System")
         self.appearance_mode.set(appearance_mode)
@@ -1277,6 +1382,7 @@ class MessengerDocsApp:
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
         docs_id = extract_google_id_from_url(docs_input_val)
+        max_cache_size = self.parse_max_cache_size()
         
         self.log(f"처리할 Docs ID: {docs_id}")
         self.log("감시 시작 요청...")
@@ -1291,7 +1397,8 @@ class MessengerDocsApp:
             # 파일 필터링 설정 추가
             "file_extensions": self.file_extensions.get(),
             "use_regex_filter": self.use_regex_filter.get(),
-            "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else ""
+            "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else "",
+            "max_cache_size": max_cache_size,
         }
         
         self.monitoring_thread = threading.Thread(

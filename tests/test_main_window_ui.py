@@ -14,15 +14,18 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("_build_result_panel", self.source)
         self.assertIn("_build_log_panel", self.source)
 
-    def test_main_window_ui_uses_gothic_font_and_workspace_copy(self):
-        self.assertIn('family="Malgun Gothic"', self.source)
+    def test_main_window_ui_keeps_font_helper_and_workspace_copy(self):
+        self.assertIn("def _font", self.source)
+        self.assertIn("if family:", self.source)
         self.assertIn("Messenger Docs Workspace", self.source)
         self.assertIn("작업 설정", self.source)
+        self.assertIn("라인 캐시 크기", self.source)
         self.assertIn("최근 추출 결과", self.source)
         self.assertIn("작업 로그", self.source)
         self.assertIn("로그 팝업", self.source)
         self.assertIn("placeholder_text=", self.source)
         self.assertIn("docs_target_status_var", self.source)
+        self.assertIn("validate_positive_integer_input", self.source)
 
     def test_main_window_ui_keeps_docs_actions_and_primary_controls(self):
         self.assertIn('text="새 문서 만들기"', self.source)

@@ -1,4 +1,5 @@
 {
     "watch_folder": "C:/Users/ExampleUser/Documents/ExampleFolder",
-    "docs_input": "https://docs.google.com/document/d/EXAMPLE_ID/edit"
+    "docs_input": "https://docs.google.com/document/d/EXAMPLE_ID/edit",
+    "max_cache_size": 10000
 }

@@ -27,6 +27,19 @@ except ModuleNotFoundError:
     sys.modules["watchdog.observers"] = watchdog_observers_module
     sys.modules["watchdog.events"] = watchdog_events_module
 
+try:
+    from googleapiclient.errors import HttpError  # noqa: F401
+except ModuleNotFoundError:
+    googleapiclient_module = types.ModuleType("googleapiclient")
+    googleapiclient_errors_module = types.ModuleType("googleapiclient.errors")
+
+    class DummyHttpError(Exception):
+        pass
+
+    googleapiclient_errors_module.HttpError = DummyHttpError
+    sys.modules["googleapiclient"] = googleapiclient_module
+    sys.modules["googleapiclient.errors"] = googleapiclient_errors_module
+
 google_auth_stub = types.ModuleType("src.auto_write_txt_to_docs.google_auth")
 google_auth_stub.get_google_services = None
 sys.modules.setdefault("src.auto_write_txt_to_docs.google_auth", google_auth_stub)
@@ -148,6 +161,37 @@ class BackendProcessorTests(unittest.TestCase):
             list(backend_processor.added_lines_cache.keys()),
             ["셋줄", "둘줄", "넷줄"],
         )
+
+    def test_configure_max_global_cache_size_applies_configured_limit_before_cache_load(self):
+        logs = []
+        with open(backend_processor.LINE_CACHE_FILE, "w", encoding="utf-8") as cache_file:
+            cache_file.write('["첫줄", "둘줄", "셋줄", "넷줄"]')
+
+        configured_size = backend_processor.configure_max_global_cache_size(
+            {"max_cache_size": "2"},
+            logs.append,
+        )
+        backend_processor.load_line_cache(logs.append)
+
+        self.assertEqual(configured_size, 2)
+        self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, 2)
+        self.assertEqual(
+            list(backend_processor.added_lines_cache.keys()),
+            ["셋줄", "넷줄"],
+        )
+        self.assertTrue(any("라인 캐시 최대 크기 설정 - 2개" in message for message in logs))
+
+    def test_configure_max_global_cache_size_uses_default_for_invalid_values(self):
+        logs = []
+
+        configured_size = backend_processor.configure_max_global_cache_size(
+            {"max_cache_size": "-10"},
+            logs.append,
+        )
+
+        self.assertEqual(configured_size, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
+        self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
+        self.assertTrue(any("기본값" in message for message in logs))
 
     def test_build_extraction_record_includes_file_title_and_extracted_time(self):
         filepath = os.path.join(self.temp_dir.name, "대화로그.txt")

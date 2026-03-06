@@ -61,8 +61,9 @@ coverage.xml
 token.json
 credentials.json 
 developer_credentials.json
-config.json 
-added_lines_cache.json 
+config.json
+added_lines_cache.json
+PROJECT_ANALYSIS.md
 # Log files
 *.log
 hwp_mcp_stdio_server.log

@@ -21,13 +21,22 @@ class ConfigManagerTests(unittest.TestCase):
         config_data = normalize_config_data({
             "watch_folder": "E:/logs",
             "use_regex_filter": True,
+            "max_cache_size": "5000",
             "unknown_key": "ignore",
         })
 
         self.assertEqual(config_data["watch_folder"], "E:/logs")
         self.assertTrue(config_data["use_regex_filter"])
         self.assertEqual(config_data["file_extensions"], ".txt")
+        self.assertEqual(config_data["max_cache_size"], 5000)
         self.assertNotIn("unknown_key", config_data)
+
+    def test_normalize_config_data_falls_back_to_default_for_invalid_cache_size(self):
+        config_data = normalize_config_data({
+            "max_cache_size": "-10",
+        })
+
+        self.assertEqual(config_data["max_cache_size"], get_default_config()["max_cache_size"])
 
     def test_save_and_load_app_config_round_trip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -36,6 +45,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "watch_folder": "E:/chat",
                 "docs_input": "docs-id",
                 "appearance_mode": "Dark",
+                "max_cache_size": "7500",
             }, config_path=str(config_path))
 
             loaded_config, used_path, loaded_from_legacy, config_found = load_app_config(
@@ -47,6 +57,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertFalse(loaded_from_legacy)
         self.assertEqual(used_path, str(config_path))
         self.assertEqual(loaded_config, saved_config)
+        self.assertEqual(loaded_config["max_cache_size"], 7500)
 
     def test_load_app_config_falls_back_to_legacy_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
