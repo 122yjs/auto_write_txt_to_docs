@@ -27,6 +27,7 @@ class ConfigManagerTests(unittest.TestCase):
 
         self.assertEqual(config_data["watch_folder"], "E:/logs")
         self.assertTrue(config_data["use_regex_filter"])
+        self.assertTrue(config_data["show_success_notifications"])
         self.assertEqual(config_data["file_extensions"], ".txt")
         self.assertEqual(config_data["max_cache_size"], 5000)
         self.assertNotIn("unknown_key", config_data)
@@ -45,6 +46,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "watch_folder": "E:/chat",
                 "docs_input": "docs-id",
                 "appearance_mode": "Dark",
+                "show_success_notifications": False,
                 "max_cache_size": "7500",
             }, config_path=str(config_path))
 
@@ -57,6 +59,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertFalse(loaded_from_legacy)
         self.assertEqual(used_path, str(config_path))
         self.assertEqual(loaded_config, saved_config)
+        self.assertFalse(loaded_config["show_success_notifications"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)
 
     def test_load_app_config_falls_back_to_legacy_path(self):
