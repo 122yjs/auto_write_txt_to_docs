@@ -172,6 +172,7 @@ class MessengerDocsApp:
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
+        self.show_success_notifications = tk.BooleanVar(value=True)
 
         # 파일 필터링 관련 변수
         self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
@@ -189,6 +190,7 @@ class MessengerDocsApp:
 
         self.tray_icon = None
         self.tray_thread = None
+        self.base_icon_image = None
         self.icon_image = None # 아이콘 이미지 객체 저장
         
         # 상태 표시 변수
@@ -201,6 +203,7 @@ class MessengerDocsApp:
         self.watch_folder.trace_add("write", self.on_setting_changed)
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
+        self.show_success_notifications.trace_add("write", self.on_setting_changed)
         self.max_cache_size.trace_add("write", self.on_setting_changed)
         self.settings_changed = False
 
@@ -326,22 +329,66 @@ class MessengerDocsApp:
         self.log("기본 아이콘 이미지 생성 완료.")
         return image
 
+    def get_tray_state_key(self, tray_status_text):
+        """트레이에 표시할 현재 상태 키를 계산한다."""
+        status_text = str(tray_status_text or "").strip()
+        if "오류" in status_text or "기록 불가" in status_text:
+            return "error"
+        if "처리 중" in status_text:
+            return "processing"
+        if "감시 중" in status_text or "업데이트 완료" in status_text:
+            return "monitoring"
+        if "중지" in status_text:
+            return "stopped"
+        return "ready"
+
+    def build_tray_status_icon(self, state_key):
+        """기본 아이콘 위에 상태 점을 덧씌운 트레이 아이콘 이미지를 생성한다."""
+        base_image = self.base_icon_image or self.icon_image
+        if base_image is None:
+            return None
+
+        status_palette = {
+            "ready": ("#1A73E8", "#8AB4F8"),
+            "monitoring": ("#0F9D58", "#81C995"),
+            "processing": ("#FB8C00", "#FBC02D"),
+            "stopped": ("#6B7280", "#9CA3AF"),
+            "error": ("#C62828", "#F28B82"),
+        }
+        outer_color, inner_color = status_palette.get(state_key, status_palette["ready"])
+
+        icon_image = base_image.convert("RGBA").copy()
+        draw = ImageDraw.Draw(icon_image)
+        diameter = max(14, icon_image.width // 3)
+        margin = 4
+        left = icon_image.width - diameter - margin
+        top = icon_image.height - diameter - margin
+        right = left + diameter
+        bottom = top + diameter
+        draw.ellipse((left, top, right, bottom), fill=outer_color, outline=(255, 255, 255, 235), width=2)
+        draw.ellipse((left + 4, top + 4, right - 4, bottom - 4), fill=inner_color)
+        return icon_image
+
     def create_or_load_icon(self):
         """ 아이콘 파일을 로드하거나 없으면 기본 아이콘 생성 """
         icon_path_temp = "icon.png" # 임시로 파일명 지정 (로드 시도용)
         try:
             # 1. 파일 로드 시도 (기존 로직 유지)
-            self.icon_image = Image.open(icon_path_temp)
+            self.base_icon_image = Image.open(icon_path_temp)
             self.log(f"아이콘 파일 로드 성공: {icon_path_temp}")
         except FileNotFoundError:
             # 2. 파일이 없으면 기본 아이콘 생성
             self.log(f"정보: 아이콘 파일({icon_path_temp}) 없음. 기본 아이콘을 생성합니다.")
-            self.icon_image = self.create_default_icon()
+            self.base_icon_image = self.create_default_icon()
         except Exception as e:
             # 3. 로드/생성 중 기타 오류 발생
             messagebox.showerror("아이콘 오류", f"아이콘 준비 중 오류 발생:\n{e}", parent=self.root)
             self.log(f"오류: 아이콘 준비 실패 - {e}")
             self.icon_image = None # 오류 시 아이콘 없음 처리
+            self.base_icon_image = None
+            return
+
+        self.icon_image = self.build_tray_status_icon("ready") or self.base_icon_image
     
     def setup_logging(self):
         """로깅 시스템 설정"""
@@ -849,10 +896,19 @@ class MessengerDocsApp:
             y = (selector_window.winfo_screenheight() // 2) - (height // 2)
             selector_window.geometry(f"{width}x{height}+{x}+{y}")
     
-    def update_tray_status(self, tray_status_text, detail_text=None):
+    def update_tray_status(self, tray_status_text, detail_text=None, state_key=None):
         """트레이 툴팁에 현재 상태를 반영한다."""
         if not self.tray_icon:
             return
+
+        resolved_state_key = state_key or self.get_tray_state_key(tray_status_text)
+        icon_image = self.build_tray_status_icon(resolved_state_key)
+        if icon_image is not None:
+            self.icon_image = icon_image
+            try:
+                self.tray_icon.icon = icon_image
+            except Exception:
+                pass
 
         title_parts = ["메신저 Docs 자동 기록"]
         if tray_status_text:
@@ -878,6 +934,38 @@ class MessengerDocsApp:
         self.update_tray_status(tray_status_text or status_text, detail_text)
         self.root.update_idletasks()
 
+    def configure_log_tags(self, target_widget):
+        """로그 텍스트 위젯에 상태별 색상 태그를 적용한다."""
+        target_widget.tag_config("log_info", foreground="#D1D5DB")
+        target_widget.tag_config("log_success", foreground="#34D399")
+        target_widget.tag_config("log_warning", foreground="#FBBF24")
+        target_widget.tag_config("log_error", foreground="#F87171")
+
+    def get_log_tag_name(self, message):
+        """로그 메시지 내용에 따라 강조 색상 태그를 선택한다."""
+        normalized_message = str(message)
+        if "오류" in normalized_message or "실패" in normalized_message or "기록 불가" in normalized_message:
+            return "log_error"
+        if "경고" in normalized_message or "보류" in normalized_message:
+            return "log_warning"
+        if "완료" in normalized_message or "성공" in normalized_message or "시작됨" in normalized_message:
+            return "log_success"
+        return "log_info"
+
+    def append_log_to_widget(self, target_widget, message):
+        """로그 메시지를 색상 태그와 함께 텍스트 위젯에 추가한다."""
+        target_widget.insert(ctk.END, message + '\n', self.get_log_tag_name(message))
+
+    def render_log_lines(self, target_widget, lines):
+        """로그 위젯 내용을 주어진 라인 목록으로 다시 그린다."""
+        target_widget.configure(state='normal')
+        target_widget.delete("1.0", ctk.END)
+        for line in lines:
+            if line:
+                self.append_log_to_widget(target_widget, line)
+        target_widget.configure(state='disabled')
+        target_widget.see(ctk.END)
+
     def create_widgets(self):
         if not build_main_window_ui:
             messagebox.showerror("UI 오류", "메인 창 UI 모듈을 불러오지 못했습니다.", parent=self.root)
@@ -891,6 +979,7 @@ class MessengerDocsApp:
                 "watch_folder": self.watch_folder,
                 "file_extensions": self.file_extensions,
                 "max_cache_size": self.max_cache_size,
+                "show_success_notifications": self.show_success_notifications,
                 "docs_input": self.docs_input,
                 "docs_target_status_var": self.docs_target_status_var,
             },
@@ -923,6 +1012,8 @@ class MessengerDocsApp:
         for widget_name, widget_value in widget_refs.items():
             setattr(self, widget_name, widget_value)
 
+        if hasattr(self, "log_text"):
+            self.configure_log_tags(self.log_text)
         self.refresh_docs_target_ui()
 
     # --- 트레이 아이콘 설정 및 제어 함수 (이전과 동일) ---
@@ -1068,11 +1159,7 @@ class MessengerDocsApp:
 
         try:
             log_content = self.log_text.get("1.0", ctk.END)
-            self.log_popup_text.configure(state='normal')
-            self.log_popup_text.delete("1.0", ctk.END)
-            self.log_popup_text.insert("1.0", log_content)
-            self.log_popup_text.configure(state='disabled')
-            self.log_popup_text.see(ctk.END)
+            self.render_log_lines(self.log_popup_text, log_content.splitlines())
         except Exception:
             pass
 
@@ -1141,6 +1228,7 @@ class MessengerDocsApp:
             corner_radius=12,
         )
         self.log_popup_text.pack(fill="both", expand=True)
+        self.configure_log_tags(self.log_popup_text)
 
         self.log_popup_window = popup_window
         self.sync_log_popup_content()
@@ -1158,14 +1246,14 @@ class MessengerDocsApp:
                 self.optimize_log_memory()
                 
                 # 새 로그 추가
-                self.log_text.insert(ctk.END, message + '\n')
+                self.append_log_to_widget(self.log_text, message)
                 self.log_text.configure(state='disabled')
                 self.log_text.see(ctk.END)
 
                 if self.log_popup_window and self.log_popup_window.winfo_exists() and self.log_popup_text:
                     self.log_popup_text.configure(state='normal')
                     self.optimize_log_memory(self.log_popup_text)
-                    self.log_popup_text.insert(ctk.END, message + '\n')
+                    self.append_log_to_widget(self.log_popup_text, message)
                     self.log_popup_text.configure(state='disabled')
                     self.log_popup_text.see(ctk.END)
             
@@ -1180,22 +1268,11 @@ class MessengerDocsApp:
             if target_widget is None:
                 target_widget = self.log_text
 
-            # 현재 로그 텍스트 내용 가져오기
-            log_content = target_widget.get("1.0", ctk.END)
-            lines = log_content.split('\n')
-            
-            # 로그 라인이 1000줄 이상이면 오래된 로그 삭제
             max_lines = 1000
-            if len(lines) > max_lines:
-                # 오래된 로그 삭제 (절반 정도 삭제)
-                lines_to_keep = lines[len(lines) - max_lines // 2:]
-                
-                # 로그 텍스트 지우고 유지할 라인만 다시 삽입
-                target_widget.delete("1.0", ctk.END)
-                target_widget.insert("1.0", "\n".join(lines_to_keep) + "\n")
-                
-                # 메모리 최적화 메시지 추가
-                target_widget.insert("1.0", "--- 오래된 로그 항목이 메모리에서 정리되었습니다 ---\n\n")
+            current_line_count = int(target_widget.index("end-1c").split('.')[0])
+            if current_line_count > max_lines:
+                lines_to_remove = current_line_count - max_lines
+                target_widget.delete("1.0", f"{lines_to_remove + 1}.0")
         except Exception as e:
             # 오류 발생 시 조용히 무시 (로깅 시스템 자체에서 오류가 발생하므로 로그 출력 안 함)
             print(f"로그 메모리 최적화 오류: {e}")
@@ -1276,7 +1353,7 @@ class MessengerDocsApp:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
                     
                     # 트레이 알림 표시
-                    if "줄 추가" in msg:
+                    if "줄 추가" in msg and self.show_success_notifications.get():
                         try:
                             # 추가된 줄 수 추출
                             import re
@@ -1361,6 +1438,7 @@ class MessengerDocsApp:
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
+            "show_success_notifications": self.show_success_notifications.get(),
             # 파일 필터링 설정 추가
             "file_extensions": self.file_extensions.get(),
             "use_regex_filter": self.use_regex_filter.get(),
@@ -1377,6 +1455,7 @@ class MessengerDocsApp:
         self.docs_input.set(normalized_config.get("docs_input", ""))
         self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
         self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
+        self.show_success_notifications.set(normalized_config.get("show_success_notifications", True))
         self.file_extensions.set(normalized_config.get("file_extensions", ".txt"))
         self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
         self.regex_pattern.set(normalized_config.get("regex_pattern", ""))

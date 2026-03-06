@@ -9,6 +9,7 @@ CONFIG_DEFAULTS = {
     "watch_folder": "",
     "docs_input": "",
     "show_help_on_startup": True,
+    "show_success_notifications": True,
     "file_extensions": ".txt",
     "use_regex_filter": False,
     "regex_pattern": "",

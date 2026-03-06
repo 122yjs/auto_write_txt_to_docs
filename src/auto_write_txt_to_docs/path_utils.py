@@ -66,6 +66,19 @@ def get_safe_cache_path(filename="cache.json", use_user_dir=True) -> Path:
         return get_project_root() / filename
 
 
+def get_log_dir(app_name="MessengerDocsAutoWriter") -> Path:
+    """로그 파일을 저장할 사용자별 디렉토리를 반환합니다."""
+    log_dir = get_user_config_dir(app_name) / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logging.warning(f"로그 디렉토리 생성 실패 ({log_dir}): {e}. 기본 경로 사용.")
+        fallback_dir = get_project_root() / "logs"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir
+    return log_dir
+
+
 # --- 기존 코드 끝 ---
 
 
@@ -118,7 +131,7 @@ PROJECT_ROOT = get_project_root()
 CONFIG_FILE = get_safe_config_path("config.json", use_user_dir=True)  # 설정 파일은 사용자 폴더에
 CACHE_FILE = get_safe_cache_path("added_lines_cache.json", use_user_dir=True)  # 라인 캐시 파일
 PROCESSED_STATE_FILE = get_safe_cache_path("processed_state.json", use_user_dir=True)  # 처리 상태 파일
-LOG_DIR = PROJECT_ROOT / "logs"  # 로그는 현재 프로젝트 logs 폴더 사용
+LOG_DIR = get_log_dir()  # 로그는 사용자 설정 디렉토리 아래 logs 폴더 사용
 
 # 레거시 경로 (이전 버전 호환용)
 LEGACY_CONFIG_FILE = PROJECT_ROOT / "config.json"

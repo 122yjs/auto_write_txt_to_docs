@@ -13,6 +13,8 @@ class PathUnificationTests(unittest.TestCase):
         self.assertEqual(path_utils.CONFIG_FILE.name, "config.json")
         self.assertEqual(path_utils.CACHE_FILE.parent, user_config_dir / "cache")
         self.assertEqual(path_utils.CACHE_FILE.name, "added_lines_cache.json")
+        self.assertEqual(path_utils.LOG_DIR.parent, user_config_dir)
+        self.assertEqual(path_utils.LOG_DIR.name, "logs")
         self.assertEqual(path_utils.USER_CREDENTIALS_FILE.parent, user_config_dir)
         self.assertEqual(path_utils.USER_CREDENTIALS_FILE.name, "developer_credentials.json")
 
@@ -27,6 +29,7 @@ class PathUnificationTests(unittest.TestCase):
         self.assertIn("LOG_DIR_STR", source)
         self.assertIn("USER_CREDENTIALS_FILE_STR", source)
         self.assertIn("get_effective_credentials_path", source)
+        self.assertNotIn('LOG_DIR = PROJECT_ROOT / "logs"', Path("src/auto_write_txt_to_docs/path_utils.py").read_text(encoding="utf-8"))
         self.assertNotIn('PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))', source)
         self.assertNotIn('CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")', source)
 
