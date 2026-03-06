@@ -6,6 +6,7 @@ from src.auto_write_txt_to_docs.path_utils import CONFIG_FILE_STR, LEGACY_CONFIG
 
 
 CONFIG_DEFAULTS = {
+    "first_run": True,
     "watch_folder": "",
     "docs_input": "",
     "show_help_on_startup": True,
@@ -68,7 +69,11 @@ def load_app_config(config_path=CONFIG_FILE_STR, legacy_config_path=LEGACY_CONFI
     with resolved_path.open("r", encoding="utf-8") as config_file:
         config_data = json.load(config_file)
 
-    return normalize_config_data(config_data), str(resolved_path), loaded_from_legacy, True
+    normalized_config = normalize_config_data(config_data)
+    if isinstance(config_data, dict) and config_data and "first_run" not in config_data:
+        normalized_config["first_run"] = False
+
+    return normalized_config, str(resolved_path), loaded_from_legacy, True
 
 
 def save_app_config(config_data, config_path=CONFIG_FILE_STR):
@@ -113,4 +118,8 @@ def load_backup_config(backup_path):
     with backup_file.open("r", encoding="utf-8") as source_file:
         backup_data = json.load(source_file)
 
-    return normalize_config_data(backup_data), backup_data
+    normalized_config = normalize_config_data(backup_data)
+    if isinstance(backup_data, dict) and backup_data and "first_run" not in backup_data:
+        normalized_config["first_run"] = False
+
+    return normalized_config, backup_data

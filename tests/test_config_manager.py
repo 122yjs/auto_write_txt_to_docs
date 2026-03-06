@@ -27,6 +27,7 @@ class ConfigManagerTests(unittest.TestCase):
 
         self.assertEqual(config_data["watch_folder"], "E:/logs")
         self.assertTrue(config_data["use_regex_filter"])
+        self.assertTrue(config_data["first_run"])
         self.assertTrue(config_data["show_success_notifications"])
         self.assertEqual(config_data["file_extensions"], ".txt")
         self.assertEqual(config_data["max_cache_size"], 5000)
@@ -46,6 +47,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "watch_folder": "E:/chat",
                 "docs_input": "docs-id",
                 "appearance_mode": "Dark",
+                "first_run": False,
                 "show_success_notifications": False,
                 "max_cache_size": "7500",
             }, config_path=str(config_path))
@@ -59,6 +61,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertFalse(loaded_from_legacy)
         self.assertEqual(used_path, str(config_path))
         self.assertEqual(loaded_config, saved_config)
+        self.assertFalse(loaded_config["first_run"])
         self.assertFalse(loaded_config["show_success_notifications"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)
 
@@ -67,6 +70,7 @@ class ConfigManagerTests(unittest.TestCase):
             primary_path = Path(temp_dir) / "config.json"
             legacy_path = Path(temp_dir) / "legacy_config.json"
             legacy_payload = get_default_config()
+            legacy_payload.pop("first_run", None)
             legacy_payload["watch_folder"] = "E:/legacy"
 
             with legacy_path.open("w", encoding="utf-8") as legacy_file:
@@ -80,7 +84,26 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertTrue(config_found)
         self.assertTrue(loaded_from_legacy)
         self.assertEqual(used_path, str(legacy_path))
+        self.assertFalse(loaded_config["first_run"])
         self.assertEqual(loaded_config["watch_folder"], "E:/legacy")
+
+    def test_load_backup_config_defaults_first_run_to_false_for_legacy_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = Path(temp_dir) / "backup.json"
+            legacy_payload = {
+                "watch_folder": "E:/chat",
+                "backup_date": "2026-03-07 10:00:00",
+                "backup_version": BACKUP_VERSION,
+            }
+
+            with backup_path.open("w", encoding="utf-8") as backup_file:
+                json.dump(legacy_payload, backup_file, indent=4, ensure_ascii=False)
+
+            restored_config, backup_data = load_backup_config(str(backup_path))
+
+        self.assertEqual(backup_data["backup_version"], BACKUP_VERSION)
+        self.assertFalse(restored_config["first_run"])
+        self.assertEqual(restored_config["watch_folder"], "E:/chat")
 
     def test_save_and_load_backup_config_preserves_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
