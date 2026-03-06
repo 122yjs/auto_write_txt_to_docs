@@ -160,12 +160,13 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         anchor="w",
         font=_font(ctk, 13, "bold", family=font_family),
     ).pack(side="left", padx=(0, 8))
-    ctk.CTkEntry(
+    watch_folder_entry = ctk.CTkEntry(
         folder_row,
         textvariable=state_vars["watch_folder"],
         height=36,
         font=_font(ctk, 13, family=font_family),
-    ).pack(side="left", fill="x", expand=True, padx=4)
+    )
+    watch_folder_entry.pack(side="left", fill="x", expand=True, padx=4)
     ctk.CTkButton(
         folder_row,
         text="폴더 선택",
@@ -187,6 +188,18 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         hover_color=("gray78", "gray34"),
         text_color=("gray20", "gray92"),
     ).pack(side="left", padx=(8, 0))
+
+    folder_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    folder_hint_row.pack(fill="x", padx=18, pady=(0, 6))
+    watch_folder_drop_hint_label = ctk.CTkLabel(
+        folder_hint_row,
+        textvariable=state_vars["watch_folder_drop_hint"],
+        font=_font(ctk, 11, family=font_family),
+        text_color=("gray45", "gray70"),
+        anchor="w",
+        justify="left",
+    )
+    watch_folder_drop_hint_label.pack(fill="x", padx=(118, 0))
 
     filter_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     filter_row.pack(fill="x", padx=18, pady=6)
@@ -365,6 +378,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
 
     return {
         "settings_frame": settings_frame,
+        "watch_folder_entry": watch_folder_entry,
+        "watch_folder_drop_hint_label": watch_folder_drop_hint_label,
         "max_cache_size_entry": max_cache_size_entry,
         "notification_checkbox": notification_checkbox,
         "docs_input_entry": docs_input_entry,

@@ -41,6 +41,7 @@ $PyInstallerArgs = @(
     "--specpath", $BuildRoot,
     "--add-data", "$AssetSource;assets",
     "--collect-all", "customtkinter",
+    "--collect-all", "tkinterdnd2",
     "--collect-submodules", "googleapiclient",
     "--collect-submodules", "google_auth_oauthlib",
     "--collect-submodules", "google.auth",

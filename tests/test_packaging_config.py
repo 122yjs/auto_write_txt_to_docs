@@ -18,6 +18,7 @@ class PackagingConfigTests(unittest.TestCase):
         dependencies = self.pyproject_data["project"]["dependencies"]
         self.assertIn("psutil>=5.9.5", dependencies)
         self.assertIn("pystray>=0.19.0", dependencies)
+        self.assertIn("tkinterdnd2>=0.4.2", dependencies)
 
     def test_setuptools_configuration_includes_main_gui_module(self):
         setuptools_config = self.pyproject_data["tool"]["setuptools"]
@@ -33,6 +34,7 @@ class PackagingConfigTests(unittest.TestCase):
     def test_requirements_file_keeps_psutil_and_pystray_separate(self):
         self.assertIn("psutil>=5.9.5", self.requirements)
         self.assertTrue(any(line.startswith("pystray") for line in self.requirements))
+        self.assertTrue(any(line.startswith("tkinterdnd2") for line in self.requirements))
         self.assertTrue(all("psutil" not in line or "pystray" not in line for line in self.requirements))
 
 
