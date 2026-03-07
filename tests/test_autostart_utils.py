@@ -35,9 +35,10 @@ class AutostartUtilsTests(unittest.TestCase):
             executable_path="C:/Python/python.exe",
             frozen=False,
         )
+        normalized_contents = launcher_contents.replace("\\", "/")
 
         self.assertIn("@echo off", launcher_contents)
-        self.assertIn('"C:/Python/python.exe" "C:/apps/auto_write/main_gui.py"', launcher_contents)
+        self.assertIn('"C:/Python/python.exe" "C:/apps/auto_write/main_gui.py"', normalized_contents)
 
     def test_set_windows_startup_enabled_creates_and_removes_launcher_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
