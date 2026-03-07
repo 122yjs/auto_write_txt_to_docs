@@ -278,6 +278,37 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     )
     notification_checkbox.pack(side="left", padx=4)
 
+    autostart_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    autostart_row.pack(fill="x", padx=18, pady=6)
+    ctk.CTkLabel(
+        autostart_row,
+        text="Windows 자동 실행",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    autostart_checkbox = ctk.CTkCheckBox(
+        autostart_row,
+        text="Windows 로그인 시 자동으로 실행",
+        variable=state_vars["launch_on_windows_startup"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    autostart_checkbox.pack(side="left", padx=4)
+
+    autostart_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    autostart_hint_row.pack(fill="x", padx=18, pady=(0, 6))
+    autostart_hint_label = ctk.CTkLabel(
+        autostart_hint_row,
+        textvariable=state_vars["autostart_hint"],
+        font=_font(ctk, 11, family=font_family),
+        text_color=("gray45", "gray70"),
+        anchor="w",
+        justify="left",
+    )
+    autostart_hint_label.pack(fill="x", padx=(118, 0))
+
     doc_title_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     doc_title_row.pack(fill="x", padx=18, pady=(10, 4))
     ctk.CTkLabel(
@@ -382,6 +413,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         "watch_folder_drop_hint_label": watch_folder_drop_hint_label,
         "max_cache_size_entry": max_cache_size_entry,
         "notification_checkbox": notification_checkbox,
+        "autostart_checkbox": autostart_checkbox,
+        "autostart_hint_label": autostart_hint_label,
         "docs_input_entry": docs_input_entry,
         "create_doc_button": create_doc_button,
         "manual_doc_input_button": manual_doc_input_button,

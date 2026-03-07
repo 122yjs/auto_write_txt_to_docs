@@ -22,6 +22,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("watch_folder_drop_hint", self.source)
         self.assertIn("라인 캐시 크기", self.source)
         self.assertIn("작업 성공 알림", self.source)
+        self.assertIn("Windows 자동 실행", self.source)
         self.assertIn("최근 추출 결과", self.source)
         self.assertIn("작업 로그", self.source)
         self.assertIn("로그 팝업", self.source)
@@ -42,6 +43,8 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn('text="Docs 웹에서 열기"', self.source)
         self.assertIn("watch_folder_entry", self.source)
         self.assertIn('textvariable=state_vars["watch_folder_drop_hint"]', self.source)
+        self.assertIn('text="Windows 로그인 시 자동으로 실행"', self.source)
+        self.assertIn('textvariable=state_vars["autostart_hint"]', self.source)
         self.assertIn("문서 ID", self.source)
 
 
