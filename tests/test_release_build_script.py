@@ -24,6 +24,7 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         self.assertIn("README.md", self.script_source)
         self.assertIn("config.json.example", self.script_source)
         self.assertIn("added_lines_cache.json.example", self.script_source)
+        self.assertIn("developer_credentials.json.example", self.script_source)
         self.assertIn("Compress-Archive", self.script_source)
         self.assertIn("portable.zip", self.script_source)
         self.assertIn("Remove-Item $BuildRoot -Recurse -Force", self.script_source)

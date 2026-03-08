@@ -58,6 +58,7 @@ Write-Host "[4/6] Copying support files"
 Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $AppDistDir "README.md") -Force
 Copy-Item (Join-Path $ProjectRoot "config.json.example") (Join-Path $AppDistDir "config.json.example") -Force
 Copy-Item (Join-Path $ProjectRoot "added_lines_cache.json.example") (Join-Path $AppDistDir "added_lines_cache.json.example") -Force
+Copy-Item (Join-Path $ProjectRoot "src\auto_write_txt_to_docs\assets\developer_credentials.json.example") (Join-Path $AppDistDir "developer_credentials.json.example") -Force
 
 Write-Host "[5/6] Creating portable zip"
 Compress-Archive -Path (Join-Path $AppDistDir "*") -DestinationPath $ZipPath -Force

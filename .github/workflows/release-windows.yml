@@ -60,3 +60,4 @@ jobs:
         shell: pwsh
         run: |
           gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriter-win64-portable.zip --clobber
+          gh release upload ${{ steps.vars.outputs.tag }} .\src\auto_write_txt_to_docs\assets\developer_credentials.json.example --clobber

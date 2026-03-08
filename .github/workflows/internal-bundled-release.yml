@@ -1,0 +1,78 @@
+name: Build Internal Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref to build
+        required: true
+        default: main
+      release_tag:
+        description: Draft release tag to create or update
+        required: true
+        default: v0.3.0-internal
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Materialize bundled developer credentials
+        shell: pwsh
+        env:
+          PRIVATE_DEVELOPER_CREDENTIALS_JSON: ${{ secrets.PRIVATE_DEVELOPER_CREDENTIALS_JSON }}
+        run: |
+          if (-not $env:PRIVATE_DEVELOPER_CREDENTIALS_JSON) {
+            throw "Missing PRIVATE_DEVELOPER_CREDENTIALS_JSON secret."
+          }
+
+          $targetPath = "src/auto_write_txt_to_docs/assets/developer_credentials.json"
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($targetPath, $env:PRIVATE_DEVELOPER_CREDENTIALS_JSON, $utf8NoBom)
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Build Windows portable package
+        shell: pwsh
+        run: .\scripts\build_release.ps1 -PythonExe python
+
+      - name: Ensure internal draft release exists
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "${{ inputs.release_tag }}" >/dev/null 2>&1; then
+            gh release create "${{ inputs.release_tag }}" \
+              --draft \
+              --target "${{ inputs.source_ref }}" \
+              --title "${{ inputs.release_tag }}" \
+              --notes "Internal distribution build with bundled developer credentials. Do not publish or redistribute publicly."
+          fi
+
+      - name: Upload internal release asset
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release upload ${{ inputs.release_tag }} .\release\MessengerDocsAutoWriter-win64-portable.zip --clobber
