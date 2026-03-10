@@ -14,15 +14,14 @@
 
 넣어도 되는 것:
 
-- 실행 파일
+- 실행 파일 (단일 파일 .exe 및 폴더형 .zip)
+- 실제 `developer_credentials.json` (비개발자 사용 편의)
 - `README.md`
 - `config.json.example`
 - `added_lines_cache.json.example`
 - `developer_credentials.json.example`
 
 넣으면 안 되는 것:
-
-- 실제 `developer_credentials.json`
 - `token.json`
 - 개인 PC에서 생성된 설정 파일
 - 개인 로그 파일
@@ -48,10 +47,11 @@
 ### `developer_credentials.json`
 
 이 파일은 프로그램의 Google OAuth 클라이언트 정보입니다.
+현재 프로젝트 정책상 **비개발자 편의**를 위해 모든 공식 배포물(공개/내부 모두)에 기본적으로 포함합니다.
 
-- 공개용 릴리즈: 포함 금지
-- 내부용 릴리즈: 포함 가능
-- 공개 저장소 커밋: 포함 금지
+- 공개용 릴리즈: 포함 가능 ✅
+- 내부용 릴리즈: 포함 가능 ✅
+- 공개 저장소 커밋: 포함 금지 ❌ (소스 코드 관리에는 포함하지 않고 CI에서 주입)
 
 ### `developer_credentials.json.example`
 
@@ -77,10 +77,10 @@
 ### 공개용 빌드
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBundledCredentials
 ```
 
-이 명령은 실제 `developer_credentials.json`을 제외하고 빌드합니다.
+이 명령은 실제 `developer_credentials.json`을 포함하고 빌드합니다.
 
 ### 내부용 빌드
 
@@ -94,8 +94,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBun
 
 공개용 릴리즈 체크리스트:
 
-- `developer_credentials.json`이 포함되지 않았는지 확인
-- `developer_credentials.json.example`만 들어 있는지 확인
+- `developer_credentials.json`이 패키지(`assets`)에 정상적으로 포함되었는지 확인
+- 단일 실행 파일(`.exe`)이 제대로 빌드되었는지 확인
+- `developer_credentials.json.example`이 잘 들어 있는지 확인
 - `token.json`이 전혀 없는지 확인
 - 로그와 개인 설정 파일이 들어 있지 않은지 확인
 

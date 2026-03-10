@@ -13,6 +13,7 @@ $DistRoot = Join-Path $ProjectRoot "dist"
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $AppDistDir = Join-Path $DistRoot $AppName
 $ZipPath = Join-Path $ReleaseRoot "$AppName-win64-portable.zip"
+$OneFilePath = Join-Path $ReleaseRoot "$AppName-standalone.exe"
 $AssetSource = Join-Path $ProjectRoot "src\auto_write_txt_to_docs\assets"
 $StagedAssetDir = Join-Path $BuildRoot "assets_runtime"
 $EntryScript = Join-Path $ProjectRoot "main_gui.py"
@@ -39,6 +40,12 @@ if ($IncludeBundledCredentials) {
     Write-Host "  - Internal build: bundled developer credentials included"
 } else {
     Write-Host "  - Public build: bundled developer credentials excluded"
+}
+
+Write-Host "[2/6] Preparing PyInstaller"
+if (-not $SkipPyInstallerInstall) {
+    & $PythonExe -m pip install --upgrade pyinstaller
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
 }
 
 Write-Host "[2/6] Preparing PyInstaller"
@@ -79,8 +86,34 @@ Copy-Item (Join-Path $ProjectRoot "config.json.example") (Join-Path $AppDistDir 
 Copy-Item (Join-Path $ProjectRoot "added_lines_cache.json.example") (Join-Path $AppDistDir "added_lines_cache.json.example") -Force
 Copy-Item (Join-Path $ProjectRoot "src\auto_write_txt_to_docs\assets\developer_credentials.json.example") (Join-Path $AppDistDir "developer_credentials.json.example") -Force
 
-Write-Host "[5/6] Creating portable zip"
+Write-Host "[5/6] Creating portable zip and onefile standalone"
 Compress-Archive -Path (Join-Path $AppDistDir "*") -DestinationPath $ZipPath -Force
+
+Write-Host "  - Running PyInstaller for onefile deployment"
+$PyInstallerArgsOneFile = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--windowed",
+    "--onefile",
+    "--name", "$AppName-standalone",
+    "--distpath", $ReleaseRoot,
+    "--workpath", $BuildRoot,
+    "--specpath", $BuildRoot,
+    "--add-data", "$StagedAssetDir;assets",
+    "--collect-all", "customtkinter",
+    "--collect-all", "tkinterdnd2",
+    "--collect-submodules", "googleapiclient",
+    "--collect-submodules", "google_auth_oauthlib",
+    "--collect-submodules", "google.auth",
+    "--collect-submodules", "PIL",
+    "--hidden-import", "pystray._win32",
+    "--hidden-import", "watchdog.observers.winapi",
+    "--hidden-import", "watchdog.observers.read_directory_changes",
+    $EntryScript
+)
+& $PythonExe @PyInstallerArgsOneFile
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller onefile build failed." }
 
 Write-Host "[6/6] Cleaning temporary build files"
 if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
@@ -88,3 +121,4 @@ if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
 Write-Host "Done"
 Write-Host "EXE folder: $AppDistDir"
 Write-Host "ZIP file: $ZipPath"
+Write-Host "Standalone EXE file: $OneFilePath"

@@ -40,6 +40,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Materialize bundled developer credentials
+        shell: pwsh
+        env:
+          PRIVATE_DEVELOPER_CREDENTIALS_JSON: ${{ secrets.PRIVATE_DEVELOPER_CREDENTIALS_JSON }}
+        run: |
+          if (-not $env:PRIVATE_DEVELOPER_CREDENTIALS_JSON) {
+            throw "Missing PRIVATE_DEVELOPER_CREDENTIALS_JSON secret."
+          }
+
+          $targetPath = "src/auto_write_txt_to_docs/assets/developer_credentials.json"
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($targetPath, $env:PRIVATE_DEVELOPER_CREDENTIALS_JSON, $utf8NoBom)
+
       - name: Install dependencies
         shell: pwsh
         run: |
@@ -52,7 +65,7 @@ jobs:
 
       - name: Build Windows portable package
         shell: pwsh
-        run: .\scripts\build_release.ps1 -PythonExe python
+        run: .\scripts\build_release.ps1 -PythonExe python -IncludeBundledCredentials
 
       - name: Upload release asset
         env:
@@ -60,4 +73,5 @@ jobs:
         shell: pwsh
         run: |
           gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriter-win64-portable.zip --clobber
+          gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriter-standalone.exe --clobber
           gh release upload ${{ steps.vars.outputs.tag }} .\src\auto_write_txt_to_docs\assets\developer_credentials.json.example --clobber
