@@ -75,6 +75,8 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("def get_log_tag_name", self.main_gui_source)
         self.assertIn("def append_log_to_widget", self.main_gui_source)
         self.assertIn("def render_log_lines", self.main_gui_source)
+        self.assertIn('self.root.geometry("980x750")', self.main_gui_source)
+        self.assertIn('self.root.minsize(980, 750)', self.main_gui_source)
         self.assertIn("⚠️ 기록 불가", self.main_gui_source)
         self.assertIn("오류 상태", self.main_gui_source)
         self.assertIn("preloaded_services", self.main_gui_source)

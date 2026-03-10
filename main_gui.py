@@ -213,8 +213,8 @@ class MessengerDocsApp:
         self.root.title("메신저 Docs 자동 기록 (트레이)")
         self.ui_font_family = detect_ui_font_family(self.root)
         # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
-        self.root.geometry("900x750")
-        self.root.minsize(900, 750)
+        self.root.geometry("980x750")
+        self.root.minsize(980, 750)
 
         # --- 상단 메뉴바 생성 ---
         self._create_menubar()
