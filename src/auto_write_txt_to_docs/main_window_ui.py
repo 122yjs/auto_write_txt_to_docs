@@ -22,10 +22,10 @@ def _font(ctk, size, weight="normal", family=None):
 def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
     """상단 상태 패널을 생성한다."""
     status_card = ctk.CTkFrame(parent, corner_radius=14)
-    status_card.pack(fill="x", pady=(0, 14))
+    status_card.pack(fill="x", pady=(0, 10))
 
     header_frame = ctk.CTkFrame(status_card, fg_color="transparent")
-    header_frame.pack(fill="x", padx=18, pady=(16, 8))
+    header_frame.pack(fill="x", padx=14, pady=(12, 6))
 
     title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
     title_frame.pack(side="left", fill="both", expand=True)
@@ -33,7 +33,7 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
     ctk.CTkLabel(
         title_frame,
         text="Messenger Docs Workspace",
-        font=_font(ctk, 20, "bold", family=font_family),
+        font=_font(ctk, 18, "bold", family=font_family),
     ).pack(anchor="w")
     ctk.CTkLabel(
         title_frame,
@@ -49,16 +49,16 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
         text="현재 상태",
         font=_font(ctk, 11, "bold", family=font_family),
         text_color=("gray35", "gray80"),
-    ).pack(side="left", padx=(12, 6), pady=8)
+    ).pack(side="left", padx=(10, 4), pady=6)
     status_label = ctk.CTkLabel(
         state_pill,
         textvariable=state_vars["status_var"],
-        font=_font(ctk, 13, "bold", family=font_family),
+        font=_font(ctk, 12, "bold", family=font_family),
     )
-    status_label.pack(side="left", padx=(0, 12), pady=8)
+    status_label.pack(side="left", padx=(0, 10), pady=6)
 
     metrics_frame = ctk.CTkFrame(status_card, fg_color="transparent")
-    metrics_frame.pack(fill="x", padx=18, pady=(0, 16))
+    metrics_frame.pack(fill="x", padx=14, pady=(0, 12))
 
     left_metrics = ctk.CTkFrame(metrics_frame, fg_color="transparent")
     left_metrics.pack(side="left", fill="x", expand=True)
@@ -66,18 +66,18 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
     memory_label = ctk.CTkLabel(
         left_metrics,
         textvariable=state_vars["memory_usage"],
-        font=_font(ctk, 13, family=font_family),
+        font=_font(ctk, 12, family=font_family),
     )
     memory_label.pack(side="left")
 
     memory_optimize_button = ctk.CTkButton(
         left_metrics,
         text="메모리 정리",
-        width=92,
-        height=30,
+        width=84,
+        height=28,
         corner_radius=10,
         command=callbacks["optimize_memory"],
-        font=_font(ctk, 12, "bold", family=font_family),
+        font=_font(ctk, 11, "bold", family=font_family),
         fg_color=("gray85", "gray28"),
         hover_color=("gray78", "gray34"),
         text_color=("gray20", "gray92"),
@@ -121,14 +121,14 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
 def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     """중앙 작업 설정 패널을 생성한다."""
     settings_frame = ctk.CTkFrame(parent, corner_radius=14)
-    settings_frame.pack(fill="x", pady=(0, 14))
+    settings_frame.pack(fill="x", pady=(0, 10))
     validate_command = (
         settings_frame.register(callbacks["validate_positive_integer_input"]),
         "%P",
     )
 
     title_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    title_frame.pack(fill="x", padx=18, pady=(16, 6))
+    title_frame.pack(fill="x", padx=14, pady=(12, 4))
 
     ctk.CTkLabel(
         title_frame,
@@ -149,10 +149,10 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         justify="left",
         text_color=("gray45", "gray70"),
     )
-    auth_notice.pack(fill="x", padx=18, pady=(0, 10))
+    auth_notice.pack(fill="x", padx=14, pady=(0, 8))
 
     folder_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    folder_row.pack(fill="x", padx=18, pady=6)
+    folder_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         folder_row,
         text="감시 폴더",
@@ -163,15 +163,15 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     watch_folder_entry = ctk.CTkEntry(
         folder_row,
         textvariable=state_vars["watch_folder"],
-        height=36,
+        height=32,
         font=_font(ctk, 13, family=font_family),
     )
     watch_folder_entry.pack(side="left", fill="x", expand=True, padx=4)
     ctk.CTkButton(
         folder_row,
         text="폴더 선택",
-        width=92,
-        height=36,
+        width=88,
+        height=32,
         corner_radius=10,
         command=callbacks["browse_folder"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -179,8 +179,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ctk.CTkButton(
         folder_row,
         text="열기",
-        width=64,
-        height=36,
+        width=60,
+        height=32,
         corner_radius=10,
         command=callbacks["open_watch_folder"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -190,7 +190,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ).pack(side="left", padx=(8, 0))
 
     folder_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    folder_hint_row.pack(fill="x", padx=18, pady=(0, 6))
+    folder_hint_row.pack(fill="x", padx=14, pady=(0, 4))
     watch_folder_drop_hint_label = ctk.CTkLabel(
         folder_hint_row,
         textvariable=state_vars["watch_folder_drop_hint"],
@@ -202,7 +202,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     watch_folder_drop_hint_label.pack(fill="x", padx=(118, 0))
 
     filter_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    filter_row.pack(fill="x", padx=18, pady=6)
+    filter_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         filter_row,
         text="파일 필터",
@@ -214,7 +214,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         filter_row,
         textvariable=state_vars["file_extensions"],
         width=130,
-        height=36,
+        height=32,
         font=_font(ctk, 13, family=font_family),
     ).pack(side="left", padx=4)
     ctk.CTkLabel(
@@ -226,15 +226,15 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ctk.CTkButton(
         filter_row,
         text="고급 필터",
-        width=92,
-        height=36,
+        width=86,
+        height=32,
         corner_radius=10,
         command=callbacks["show_filter_settings"],
         font=_font(ctk, 12, "bold", family=font_family),
     ).pack(side="right")
 
     max_cache_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    max_cache_row.pack(fill="x", padx=18, pady=6)
+    max_cache_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         max_cache_row,
         text="라인 캐시 크기",
@@ -246,7 +246,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         max_cache_row,
         textvariable=state_vars["max_cache_size"],
         width=130,
-        height=36,
+        height=32,
         font=_font(ctk, 13, family=font_family),
         validate="key",
         validatecommand=validate_command,
@@ -258,19 +258,18 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray72"),
     ).pack(side="left", padx=(8, 0))
-
     notification_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    notification_row.pack(fill="x", padx=18, pady=6)
+    notification_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         notification_row,
-        text="작업 성공 알림",
+        text="작업 결과 알림",
         width=110,
         anchor="w",
         font=_font(ctk, 13, "bold", family=font_family),
     ).pack(side="left", padx=(0, 8))
     notification_checkbox = ctk.CTkCheckBox(
         notification_row,
-        text="Google Docs 기록 성공 시 트레이 알림 표시",
+        text="작업 결과 알림 표시",
         variable=state_vars["show_success_notifications"],
         onvalue=True,
         offvalue=False,
@@ -278,8 +277,27 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     )
     notification_checkbox.pack(side="left", padx=4)
 
+    sound_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    sound_row.pack(fill="x", padx=14, pady=4)
+    ctk.CTkLabel(
+        sound_row,
+        text="작업 결과 효과음",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    sound_checkbox = ctk.CTkCheckBox(
+        sound_row,
+        text="작업 결과 효과음 재생",
+        variable=state_vars["play_event_sounds"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    sound_checkbox.pack(side="left", padx=4)
+
     autostart_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    autostart_row.pack(fill="x", padx=18, pady=6)
+    autostart_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         autostart_row,
         text="Windows 자동 실행",
@@ -298,7 +316,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     autostart_checkbox.pack(side="left", padx=4)
 
     autostart_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    autostart_hint_row.pack(fill="x", padx=18, pady=(0, 6))
+    autostart_hint_row.pack(fill="x", padx=14, pady=(0, 4))
     autostart_hint_label = ctk.CTkLabel(
         autostart_hint_row,
         textvariable=state_vars["autostart_hint"],
@@ -308,9 +326,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         justify="left",
     )
     autostart_hint_label.pack(fill="x", padx=(118, 0))
-
     doc_title_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    doc_title_row.pack(fill="x", padx=18, pady=(10, 4))
+    doc_title_row.pack(fill="x", padx=14, pady=(6, 3))
     ctk.CTkLabel(
         doc_title_row,
         text="문서 작업",
@@ -326,12 +343,12 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ).pack(side="left")
 
     docs_action_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    docs_action_row.pack(fill="x", padx=18, pady=6)
+    docs_action_row.pack(fill="x", padx=14, pady=4)
     create_doc_button = ctk.CTkButton(
         docs_action_row,
         text="새 문서 만들기",
-        width=122,
-        height=38,
+        width=112,
+        height=34,
         corner_radius=12,
         command=callbacks["create_new_google_doc"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -342,8 +359,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     manual_doc_input_button = ctk.CTkButton(
         docs_action_row,
         text="기존 문서 주소 입력",
-        width=152,
-        height=38,
+        width=140,
+        height=34,
         corner_radius=12,
         command=callbacks["focus_existing_docs_input"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -355,8 +372,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     select_doc_button = ctk.CTkButton(
         docs_action_row,
         text="문서 목록",
-        width=92,
-        height=38,
+        width=84,
+        height=34,
         corner_radius=12,
         command=callbacks["select_google_doc"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -364,7 +381,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     select_doc_button.pack(side="left", padx=(8, 0))
 
     docs_input_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    docs_input_row.pack(fill="x", padx=18, pady=(6, 18))
+    docs_input_row.pack(fill="x", padx=14, pady=(4, 6))
     ctk.CTkLabel(
         docs_input_row,
         text="기존 문서 주소/ID",
@@ -375,14 +392,14 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     docs_input_entry = ctk.CTkEntry(
         docs_input_row,
         textvariable=state_vars["docs_input"],
-        height=36,
+        height=32,
         font=_font(ctk, 13, family=font_family),
         placeholder_text="예: https://docs.google.com/document/d/문서ID/edit 또는 문서 ID",
     )
     docs_input_entry.pack(side="left", fill="x", expand=True, padx=4)
 
     docs_lock_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-    docs_lock_row.pack(fill="x", padx=18, pady=(0, 18))
+    docs_lock_row.pack(fill="x", padx=14, pady=(0, 4))
 
     docs_target_status_label = ctk.CTkLabel(
         docs_lock_row,
@@ -397,8 +414,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     docs_lock_button = ctk.CTkButton(
         docs_lock_row,
         text="문서 경로 확정",
-        width=124,
-        height=36,
+        width=118,
+        height=32,
         corner_radius=10,
         command=callbacks["toggle_docs_target_lock"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -427,17 +444,17 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
 def _build_control_panel(ctk, parent, callbacks, font_family):
     """실행 및 보조 액션 패널을 생성한다."""
     control_card = ctk.CTkFrame(parent, corner_radius=14)
-    control_card.pack(fill="x", pady=(0, 14))
+    control_card.pack(fill="x", pady=(0, 4))
 
     row = ctk.CTkFrame(control_card, fg_color="transparent")
-    row.pack(fill="x", padx=18, pady=16)
+    row.pack(fill="x", padx=14, pady=4)
 
     start_button = ctk.CTkButton(
         row,
         text="감시 시작",
         command=callbacks["start_monitoring"],
-        width=128,
-        height=40,
+        width=116,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 13, "bold", family=font_family),
         fg_color="#0F9D58",
@@ -449,8 +466,8 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         row,
         text="감시 중지",
         command=callbacks["stop_monitoring"],
-        width=128,
-        height=40,
+        width=116,
+        height=34,
         corner_radius=12,
         state="disabled",
         font=_font(ctk, 13, "bold", family=font_family),
@@ -463,8 +480,8 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         row,
         text="Docs 웹에서 열기",
         command=callbacks["open_docs_in_browser"],
-        width=140,
-        height=40,
+        width=128,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 13, "bold", family=font_family),
         fg_color="#4285F4",
@@ -476,8 +493,8 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         row,
         text="로그 팝업",
         command=callbacks["show_log_popup"],
-        width=102,
-        height=40,
+        width=94,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 12, "bold", family=font_family),
         fg_color=("gray85", "gray28"),
@@ -486,14 +503,20 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     )
     log_popup_button.pack(side="left", padx=(10, 0))
 
-    ctk.CTkFrame(row, fg_color="transparent").pack(side="left", fill="x", expand=True)
+    button_spacer = ctk.CTkFrame(
+        row,
+        fg_color="transparent",
+        width=1,
+        height=1,
+    )
+    button_spacer.pack(side="left", fill="x", expand=True, padx=(8, 8))
 
     ctk.CTkButton(
         row,
         text="테마 설정",
         command=callbacks["show_theme_settings"],
-        width=96,
-        height=40,
+        width=88,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 12, "bold", family=font_family),
         fg_color=("gray85", "gray28"),
@@ -505,8 +528,8 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         row,
         text="백업/복원",
         command=callbacks["show_backup_restore_dialog"],
-        width=96,
-        height=40,
+        width=92,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 12, "bold", family=font_family),
         fg_color=("gray85", "gray28"),
@@ -518,8 +541,8 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         row,
         text="설정 저장",
         command=callbacks["save_config"],
-        width=108,
-        height=40,
+        width=100,
+        height=34,
         corner_radius=12,
         font=_font(ctk, 12, "bold", family=font_family),
     ).pack(side="right", padx=(0, 10))
@@ -535,13 +558,22 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
 def _build_log_panel(ctk, parent, callbacks, font_family):
     """로그 패널을 생성한다."""
     log_card = ctk.CTkFrame(parent, corner_radius=14)
-    log_card.pack(fill="both", expand=True)
+    log_card.pack(fill="both", expand=False)
 
     header_frame = ctk.CTkFrame(log_card, fg_color="transparent")
-    header_frame.pack(fill="x", padx=18, pady=(16, 8))
+    header_frame.pack(fill="x", padx=14, pady=(12, 6))
 
     header_title = ctk.CTkFrame(header_frame, fg_color="transparent")
     header_title.pack(side="left", fill="x", expand=True)
+
+    header_actions = ctk.CTkFrame(
+        header_frame,
+        fg_color="transparent",
+        width=238,
+        height=1,
+    )
+    header_actions.pack(side="right", padx=(10, 0))
+    header_actions.pack_propagate(False)
 
     ctk.CTkLabel(
         header_title,
@@ -563,10 +595,10 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
     ).pack(anchor="w", pady=(4, 0))
 
     log_folder_button = ctk.CTkButton(
-        header_frame,
-        text="로그 폴더 열기",
-        width=110,
-        height=34,
+        header_actions,
+        text="폴더 열기",
+        width=90,
+        height=30,
         corner_radius=10,
         command=callbacks["open_log_folder"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -574,10 +606,10 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
     log_folder_button.pack(side="right")
 
     log_search_button = ctk.CTkButton(
-        header_frame,
-        text="로그 검색",
-        width=84,
-        height=34,
+        header_actions,
+        text="검색",
+        width=60,
+        height=30,
         corner_radius=10,
         command=callbacks["show_log_search_dialog"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -588,10 +620,10 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
     log_search_button.pack(side="right", padx=(0, 8))
 
     log_clear_button = ctk.CTkButton(
-        header_frame,
-        text="로그 지우기",
-        width=90,
-        height=34,
+        header_actions,
+        text="지우기",
+        width=64,
+        height=30,
         corner_radius=10,
         command=callbacks["clear_log"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -605,11 +637,11 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
         log_card,
         state="disabled",
         wrap="word",
-        height=210,
+        height=168,
         font=_font(ctk, 12, family=font_family),
         corner_radius=12,
     )
-    log_text.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+    log_text.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
     return {
         "log_folder_button": log_folder_button,
@@ -622,10 +654,10 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
 def _build_result_panel(ctk, parent, callbacks, font_family):
     """최근 추출 결과 미리보기 패널을 생성한다."""
     result_card = ctk.CTkFrame(parent, corner_radius=14)
-    result_card.pack(fill="both", expand=False, pady=(0, 14))
+    result_card.pack(fill="both", expand=False, pady=(0, 8))
 
     header_frame = ctk.CTkFrame(result_card, fg_color="transparent")
-    header_frame.pack(fill="x", padx=18, pady=(16, 8))
+    header_frame.pack(fill="x", padx=14, pady=(12, 6))
 
     title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
     title_frame.pack(side="left", fill="x", expand=True)
@@ -645,8 +677,8 @@ def _build_result_panel(ctk, parent, callbacks, font_family):
     result_clear_button = ctk.CTkButton(
         header_frame,
         text="미리보기 지우기",
-        width=112,
-        height=34,
+        width=104,
+        height=30,
         corner_radius=10,
         command=callbacks["clear_extraction_preview"],
         font=_font(ctk, 12, "bold", family=font_family),
@@ -660,12 +692,12 @@ def _build_result_panel(ctk, parent, callbacks, font_family):
         result_card,
         state="disabled",
         wrap="word",
-        width=320,
-        height=92,
+        width=480,
+        height=124,
         font=_font(ctk, 12, family=font_family),
         corner_radius=12,
     )
-    result_preview_text.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+    result_preview_text.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
     return {
         "result_preview_text": result_preview_text,
@@ -678,18 +710,25 @@ def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_fa
     ctk = _resolve_ctk(ctk_module)
 
     main_frame = ctk.CTkFrame(parent, fg_color="transparent")
-    main_frame.pack(padx=18, pady=18, fill="both", expand=True)
+    main_frame.pack(padx=14, pady=14, fill="both", expand=True)
+
+    main_scroll_frame = ctk.CTkScrollableFrame(
+        main_frame,
+        fg_color="transparent",
+        corner_radius=0,
+    )
+    main_scroll_frame.pack(fill="both", expand=True)
 
     widget_refs = {}
-    widget_refs.update(_build_status_panel(ctk, main_frame, state_vars, callbacks, font_family))
-    widget_refs.update(_build_settings_panel(ctk, main_frame, state_vars, callbacks, font_family))
-    widget_refs.update(_build_control_panel(ctk, main_frame, callbacks, font_family))
+    widget_refs.update(_build_status_panel(ctk, main_scroll_frame, state_vars, callbacks, font_family))
+    widget_refs.update(_build_settings_panel(ctk, main_scroll_frame, state_vars, callbacks, font_family))
+    widget_refs.update(_build_control_panel(ctk, main_scroll_frame, callbacks, font_family))
 
-    workspace_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-    workspace_frame.pack(fill="both", expand=True)
+    workspace_frame = ctk.CTkFrame(main_scroll_frame, fg_color="transparent")
+    workspace_frame.pack(fill="x", expand=False)
 
-    result_column = ctk.CTkFrame(workspace_frame, fg_color="transparent")
-    result_column.pack(side="left", fill="both", expand=False, padx=(0, 14))
+    result_column = ctk.CTkFrame(workspace_frame, fg_color="transparent", width=500)
+    result_column.pack(side="left", fill="both", expand=True, padx=(0, 12))
 
     log_column = ctk.CTkFrame(workspace_frame, fg_color="transparent")
     log_column.pack(side="left", fill="both", expand=True)
@@ -697,5 +736,6 @@ def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_fa
     widget_refs.update(_build_result_panel(ctk, result_column, callbacks, font_family))
     widget_refs.update(_build_log_panel(ctk, log_column, callbacks, font_family))
     widget_refs["main_frame"] = main_frame
+    widget_refs["main_scroll_frame"] = main_scroll_frame
     widget_refs["workspace_frame"] = workspace_frame
     return widget_refs

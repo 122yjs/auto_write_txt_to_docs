@@ -12,6 +12,7 @@ CONFIG_DEFAULTS = {
     "docs_input": "",
     "show_help_on_startup": True,
     "show_success_notifications": True,
+    "play_event_sounds": True,
     "file_extensions": ".txt",
     "use_regex_filter": False,
     "regex_pattern": "",

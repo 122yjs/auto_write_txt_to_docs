@@ -1,5 +1,7 @@
 {
     "watch_folder": "C:/Users/ExampleUser/Documents/ExampleFolder",
     "docs_input": "https://docs.google.com/document/d/EXAMPLE_ID/edit",
+    "show_success_notifications": true,
+    "play_event_sounds": true,
     "max_cache_size": 10000
 }

@@ -18,6 +18,11 @@ import psutil  # 메모리 사용량 모니터링용
 import shutil
 from pathlib import Path
 
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
 # --- 트레이 아이콘 관련 라이브러리 임포트 ---
 from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
 import pystray
@@ -134,6 +139,11 @@ if TkinterDnD:
 else:
     DnDCompatibleTk = ctk.CTk
 
+
+NOTIFICATION_TITLE = "메신저 Docs 자동 기록"
+MAX_NOTIFICATION_PREVIEW_LINES = 2
+FAILURE_NOTIFICATION_DEBOUNCE_SECONDS = 2.0
+
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
     """ Google Docs URL에서 ID 추출 """
@@ -154,7 +164,6 @@ def format_google_modified_time(modified_time_text):
     except ValueError:
         return modified_time_text
 
-
 def detect_ui_font_family(root):
     """현재 플랫폼에서 사용 가능한 한글 친화 UI 폰트를 선택한다."""
     platform_candidates = {
@@ -174,14 +183,201 @@ def detect_ui_font_family(root):
 
     return None
 
+def extract_docs_update_line_count(message):
+    """Docs 업데이트 관련 로그에서 줄 수를 추출한다."""
+    if not isinstance(message, str):
+        return None
+
+    match = re.search(r'(\d+)줄 추가', message)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_filename_from_log_message(message):
+    """백엔드 로그 메시지에서 파일명을 추출한다."""
+    if not isinstance(message, str):
+        return None
+
+    explicit_match = re.search(r'파일:\s*([^,\)]+)', message)
+    if explicit_match:
+        return explicit_match.group(1).strip()
+
+    start_match = re.search(r'처리 시작:\s*(.+)$', message)
+    if start_match:
+        return start_match.group(1).strip()
+
+    complete_match = re.search(r'처리 완료:\s*(.+)$', message)
+    if complete_match:
+        return complete_match.group(1).strip()
+
+    return None
+
+
+def extract_duplicate_line_count_from_log_message(message):
+    """중복 처리 로그에서 줄 수를 추출한다."""
+    if not isinstance(message, str):
+        return None
+
+    match = re.search(r'중복\s*(\d+)줄', message)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def trim_notification_preview(preview_text, line_count=None, max_lines=MAX_NOTIFICATION_PREVIEW_LINES):
+    """알림 본문에 들어갈 미리보기 텍스트를 최대 2줄로 축약한다."""
+    if not isinstance(preview_text, str):
+        return ""
+
+    preview_lines = [line.strip() for line in preview_text.splitlines() if line.strip()]
+    if not preview_lines:
+        return ""
+
+    visible_lines = preview_lines[:max_lines]
+    remaining_lines = max(0, len(preview_lines) - len(visible_lines))
+
+    try:
+        normalized_line_count = int(line_count)
+    except (TypeError, ValueError):
+        normalized_line_count = None
+
+    if normalized_line_count is not None and normalized_line_count > len(visible_lines):
+        remaining_lines = max(remaining_lines, normalized_line_count - len(visible_lines))
+
+    if remaining_lines > 0:
+        visible_lines.append(f"... 외 {remaining_lines}줄")
+
+    return "\n".join(visible_lines)
+
+
+def build_error_notification_summary(error_type, raw_message):
+    """오류 로그를 알림용 짧은 요약으로 정리한다."""
+    default_summary = "백그라운드 작업 중 오류가 발생했습니다."
+    if not isinstance(raw_message, str):
+        return error_type or default_summary
+
+    first_line = raw_message.strip().splitlines()[0].strip()
+    first_line = re.sub(r'^\s*오류:\s*', '', first_line).strip()
+    if len(first_line) > 140:
+        first_line = first_line[:137] + "..."
+
+    if not first_line:
+        return error_type or default_summary
+    if error_type and first_line.startswith(error_type):
+        return first_line
+    if error_type:
+        return f"{error_type} - {first_line}"
+    return first_line
+
+
+def build_failure_notification_signature(filename=None, error_summary=None):
+    """동일 실패 알림 중복 억제용 시그니처를 생성한다."""
+    normalized_filename = (filename or "").strip()
+    normalized_summary = (error_summary or "").strip()
+    return f"{normalized_filename}|{normalized_summary}"
+
+
+def should_emit_debounced_failure_notification(
+    signature,
+    recent_failures,
+    current_time=None,
+    debounce_seconds=FAILURE_NOTIFICATION_DEBOUNCE_SECONDS,
+):
+    """같은 실패 알림이 짧은 시간 안에 반복되면 억제한다."""
+    if not signature:
+        return True
+
+    if current_time is None:
+        current_time = time.monotonic()
+
+    expired_signatures = [
+        key
+        for key, recorded_time in recent_failures.items()
+        if current_time - recorded_time >= debounce_seconds
+    ]
+    for key in expired_signatures:
+        recent_failures.pop(key, None)
+
+    last_recorded_time = recent_failures.get(signature)
+    if last_recorded_time is not None and current_time - last_recorded_time < debounce_seconds:
+        return False
+
+    recent_failures[signature] = current_time
+    return True
+
+
+def build_work_result_notification(
+    event_type,
+    filename=None,
+    line_count=None,
+    preview_text="",
+    error_summary=None,
+):
+    """작업 결과 유형별 알림 제목과 본문을 생성한다."""
+    normalized_filename = (filename or "").strip()
+    file_label = normalized_filename or "이름 없는 파일"
+    normalized_preview = (preview_text or "").strip()
+    normalized_error_summary = (error_summary or "").strip()
+
+    if event_type == "success":
+        if line_count:
+            header_line = f"{file_label} · {line_count}줄 추가됨"
+        else:
+            header_line = f"{file_label} · 새 내용 추가됨"
+
+        message_lines = [header_line]
+        preview_block = trim_notification_preview(normalized_preview, line_count=line_count)
+        if preview_block:
+            message_lines.append(preview_block)
+        return NOTIFICATION_TITLE, "\n".join(message_lines)
+
+    if event_type == "duplicate_recorded":
+        message_lines = [f"{file_label} · 본문 중복, 파일명만 기록됨"]
+        if normalized_preview:
+            message_lines.append(trim_notification_preview(normalized_preview))
+        else:
+            message_lines.append("본문은 중복이라 생략하고 파일명만 기록했습니다.")
+        return NOTIFICATION_TITLE, "\n".join(message_lines)
+
+    if event_type == "duplicate_skipped":
+        message_lines = [f"{file_label} · 모든 내용이 중복"]
+        if normalized_preview:
+            message_lines.append(normalized_preview)
+        else:
+            message_lines.append("모든 내용이 중복되어 추가 기록이 없습니다.")
+        return NOTIFICATION_TITLE, "\n".join(message_lines)
+
+    if event_type == "failure":
+        if normalized_filename:
+            message_lines = [f"{file_label} · 작업 실패"]
+            if normalized_error_summary:
+                message_lines.append(normalized_error_summary)
+        else:
+            header_line = normalized_error_summary.split(" - ", 1)[0] if normalized_error_summary else "작업 실패"
+            message_lines = [header_line]
+            if normalized_error_summary:
+                message_lines.append(normalized_error_summary)
+        return NOTIFICATION_TITLE, "\n".join(message_lines)
+
+    return NOTIFICATION_TITLE, ""
+
 class MessengerDocsApp:
     def __init__(self, root):
         self.root = root
         self.root.title("메신저 Docs 자동 기록 (트레이)")
         self.ui_font_family = detect_ui_font_family(self.root)
         # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
-        self.root.geometry("900x750")
-        self.root.minsize(900, 750)
+        self.root.geometry("980x750")
+        self.root.minsize(980, 750)
 
         # --- 상단 메뉴바 생성 ---
         self._create_menubar()
@@ -206,6 +402,7 @@ class MessengerDocsApp:
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
         self.show_success_notifications = tk.BooleanVar(value=True)
+        self.play_event_sounds = tk.BooleanVar(value=True)
 
         # 파일 필터링 관련 변수
         self.file_extensions = ctk.StringVar(value=".txt")  # 기본값: .txt 파일만 감시
@@ -225,6 +422,9 @@ class MessengerDocsApp:
         self.tray_thread = None
         self.base_icon_image = None
         self.icon_image = None # 아이콘 이미지 객체 저장
+        self.pending_docs_update_line_count = None
+        self.current_processing_filename = None
+        self.recent_failure_notifications = {}
         
         # 상태 표시 변수
         self.status_var = ctk.StringVar(value="준비")
@@ -239,6 +439,7 @@ class MessengerDocsApp:
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
         self.show_success_notifications.trace_add("write", self.on_setting_changed)
+        self.play_event_sounds.trace_add("write", self.on_setting_changed)
         self.max_cache_size.trace_add("write", self.on_setting_changed)
         self.settings_changed = False
 
@@ -1022,6 +1223,7 @@ class MessengerDocsApp:
                 "file_extensions": self.file_extensions,
                 "max_cache_size": self.max_cache_size,
                 "show_success_notifications": self.show_success_notifications,
+                "play_event_sounds": self.play_event_sounds,
                 "docs_input": self.docs_input,
                 "docs_target_status_var": self.docs_target_status_var,
             },
@@ -1204,12 +1406,76 @@ class MessengerDocsApp:
         if self.tray_icon and hasattr(self.tray_icon, 'notify'):
             try:
                 # 트레이 아이콘이 실행 중이고 notify 메서드가 있는 경우
-                self.tray_icon.notify(title, message)
+                self.tray_icon.notify(message, title)
                 self.log(f"트레이 알림 표시: {title}")
             except Exception as e:
                 self.log(f"트레이 알림 표시 실패: {e}")
         else:
             self.log("트레이 아이콘이 초기화되지 않아 알림을 표시할 수 없습니다.")
+
+    def play_event_sound(self, event_type):
+        """작업 결과 유형에 맞는 시스템 효과음을 재생한다."""
+        if not self.play_event_sounds.get():
+            return
+
+        if not winsound:
+            return
+
+        sound_mapping = {
+            "success": winsound.MB_ICONASTERISK,
+            "duplicate_recorded": winsound.MB_OK,
+            "duplicate_skipped": winsound.MB_OK,
+            "failure": winsound.MB_ICONHAND,
+        }
+
+        sound_type = sound_mapping.get(event_type)
+        if sound_type is None:
+            return
+
+        try:
+            winsound.MessageBeep(sound_type)
+        except Exception as exc:
+            self.log(f"효과음 재생 실패: {exc}")
+
+    def notify_background_event(
+        self,
+        event_type,
+        filename=None,
+        line_count=None,
+        preview_text="",
+        error_summary=None,
+    ):
+        """백그라운드 작업 결과를 트레이 알림과 효과음으로 전달한다."""
+        notification_title, notification_message = build_work_result_notification(
+            event_type,
+            filename=filename,
+            line_count=line_count,
+            preview_text=preview_text,
+            error_summary=error_summary,
+        )
+        if not notification_message:
+            return False
+
+        if event_type == "failure":
+            failure_signature = build_failure_notification_signature(filename, error_summary)
+            should_emit = should_emit_debounced_failure_notification(
+                failure_signature,
+                self.recent_failure_notifications,
+            )
+            if not should_emit:
+                self.log(f"동일 실패 알림 억제: {failure_signature}")
+                return False
+
+        notification_sent = False
+        if self.show_success_notifications.get():
+            try:
+                self.show_tray_notification(notification_title, notification_message)
+                notification_sent = True
+            except Exception as exc:
+                self.log(f"알림 처리 중 오류: {exc}")
+
+        self.play_event_sound(event_type)
+        return notification_sent or (self.play_event_sounds.get() and winsound is not None)
 
     def toggle_monitoring_from_tray(self, *args):
         """트레이 메뉴에서 감시를 일시 정지하거나 재개한다."""
@@ -1516,29 +1782,37 @@ class MessengerDocsApp:
                     self.update_status("중지됨", f"중지 시간: {current_time_str}")
                 elif "처리 시작:" in msg:
                     filename = msg.split("처리 시작:")[-1].strip()
+                    self.current_processing_filename = filename
                     self.update_status("처리 중", filename)
                 elif "처리 완료:" in msg: # 파일 처리 완료 후 다시 감시 중 상태로
                     self.update_status("감시 중", f"마지막 확인: {current_time_str}")
+                    self.current_processing_filename = None
+                elif "Google Docs에" in msg and "줄 추가 시도" in msg:
+                    self.pending_docs_update_line_count = extract_docs_update_line_count(msg)
                 elif "Google Docs 업데이트 완료" in msg:
                     self.update_status("Docs 업데이트 완료", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
                     if self.is_monitoring:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
-                    
-                    # 트레이 알림 표시
-                    if "줄 추가" in msg and self.show_success_notifications.get():
-                        try:
-                            # 추가된 줄 수 추출
-                            import re
-                            match = re.search(r'(\d+)줄 추가', msg)
-                            lines_count = match.group(1) if match else "새로운"
-                            
-                            # 알림 표시
-                            notification_title = "메신저 Docs 자동 기록"
-                            notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
-                            self.show_tray_notification(notification_title, notification_message)
-                        except Exception as e:
-                            self.log(f"알림 처리 중 오류: {e}")
+                    self.pending_docs_update_line_count = None
+                elif "Google Docs 중복 파일명 기록 완료" in msg:
+                    duplicate_filename = extract_filename_from_log_message(msg) or self.current_processing_filename
+                    self.update_status("중복 파일명 기록", duplicate_filename or "파일명 기록 완료")
+                elif "중복 내용만 감지되어 Google Docs 기록 생략" in msg:
+                    duplicate_filename = extract_filename_from_log_message(msg) or self.current_processing_filename
+                    self.update_status("중복으로 기록 안 함", duplicate_filename or "중복 내용")
+                    duplicate_line_count = extract_duplicate_line_count_from_log_message(msg)
+                    if duplicate_line_count:
+                        duplicate_preview = (
+                            f"내용 {duplicate_line_count}줄이 기존 기록과 모두 중복되어 추가 기록이 없습니다."
+                        )
+                    else:
+                        duplicate_preview = "모든 내용이 중복되어 추가 기록이 없습니다."
+                    self.notify_background_event(
+                        "duplicate_skipped",
+                        filename=duplicate_filename,
+                        preview_text=duplicate_preview,
+                    )
                 
                 # 오류 메시지 처리 강화
                 error_detail = None
@@ -1552,6 +1826,7 @@ class MessengerDocsApp:
                 ):
                     error_detail = "Google 인증 오류"
                 elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
+                    self.pending_docs_update_line_count = None
                     error_detail = "Docs API 오류"
                 elif "오류: 파일 처리 중 사라짐" in msg:
                     error_detail = "파일 접근 오류"
@@ -1565,12 +1840,11 @@ class MessengerDocsApp:
                         self.update_status("⚠️ 기록 불가", error_detail, tray_status_text="오류 상태")
                     else:
                         self.update_status("오류 발생", error_detail, tray_status_text="오류 상태")
-                    # 팝업은 한 번만 띄우거나, 특정 심각한 오류에만 띄우도록 조정 가능
-                    try:
-                        if "messagebox" not in msg.lower(): # 로그 자체에 messagebox 호출이 없는 경우만
-                            self.show_enhanced_error_dialog(error_detail, msg)
-                    except Exception:
-                        pass # messagebox 호출 중 오류 발생 시 무시
+                    self.notify_background_event(
+                        "failure",
+                        filename=extract_filename_from_log_message(msg) or self.current_processing_filename,
+                        error_summary=build_error_notification_summary(error_detail, msg),
+                    )
         except queue.Empty:
             pass
         except Exception:
@@ -1585,6 +1859,13 @@ class MessengerDocsApp:
             while True:
                 result_payload = self.result_queue.get_nowait()
                 self.append_extraction_preview(result_payload)
+                result_event_type = "duplicate_recorded" if result_payload.get("duplicate_only") else "success"
+                self.notify_background_event(
+                    result_event_type,
+                    filename=result_payload.get("file_title"),
+                    line_count=result_payload.get("line_count"),
+                    preview_text=result_payload.get("preview_text", ""),
+                )
         except queue.Empty:
             pass
         except Exception:
@@ -1623,6 +1904,7 @@ class MessengerDocsApp:
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
             "show_success_notifications": self.show_success_notifications.get(),
+            "play_event_sounds": self.play_event_sounds.get(),
             # 파일 필터링 설정 추가
             "file_extensions": self.file_extensions.get(),
             "use_regex_filter": self.use_regex_filter.get(),
@@ -1642,6 +1924,7 @@ class MessengerDocsApp:
         self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
         self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
         self.show_success_notifications.set(normalized_config.get("show_success_notifications", True))
+        self.play_event_sounds.set(normalized_config.get("play_event_sounds", True))
         self.file_extensions.set(normalized_config.get("file_extensions", ".txt"))
         self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
         self.regex_pattern.set(normalized_config.get("regex_pattern", ""))
@@ -1857,7 +2140,8 @@ class MessengerDocsApp:
                         f"감시 폴더: {watch_folder or '미설정'}",
                         f"대상 문서: {docs_value or '미설정'}",
                         f"시작 시 도움말: {'표시' if self.show_help_on_startup.get() else '숨김'}",
-                        f"성공 알림: {'표시' if self.show_success_notifications.get() else '숨김'}",
+                        f"작업 결과 알림: {'표시' if self.show_success_notifications.get() else '숨김'}",
+                        f"작업 결과 효과음: {'재생' if self.play_event_sounds.get() else '꺼짐'}",
                         f"Windows 자동 실행: {'사용' if self.launch_on_windows_startup.get() else '사용 안 함'}",
                     ]
                 )
@@ -1888,7 +2172,7 @@ class MessengerDocsApp:
             step_data = (
                 ("1. 감시 폴더 선택", "먼저 텍스트 파일이 쌓이는 폴더를 지정합니다. 이후 이 위치를 기준으로 자동 감시가 시작됩니다."),
                 ("2. Google Docs 연결", "기록할 문서를 정합니다. 새 문서를 만들거나, 기존 주소를 붙여넣거나, 접근 가능한 목록에서 선택할 수 있습니다."),
-                ("3. 알림 및 마무리", "처음 실행 후 보여줄 안내와 성공 알림 여부를 고르고 설정을 저장합니다."),
+                ("3. 알림 및 마무리", "처음 실행 후 보여줄 안내, 작업 결과 알림, 효과음 여부를 고르고 설정을 저장합니다."),
             )
             current_step = step_index.get()
             step_title_var.set(step_data[current_step][0])
@@ -2065,8 +2349,16 @@ class MessengerDocsApp:
         ).pack(anchor="w", pady=4)
         ctk.CTkCheckBox(
             step_three,
-            text="Google Docs 기록 성공 시 트레이 알림 표시",
+            text="작업 결과 알림 표시",
             variable=self.show_success_notifications,
+            onvalue=True,
+            offvalue=False,
+            font=self.build_ui_font(12),
+        ).pack(anchor="w", pady=4)
+        ctk.CTkCheckBox(
+            step_three,
+            text="작업 결과 효과음 재생",
+            variable=self.play_event_sounds,
             onvalue=True,
             offvalue=False,
             font=self.build_ui_font(12),
@@ -2140,6 +2432,7 @@ class MessengerDocsApp:
         wizard_trace_ids.append((self.docs_input, self.docs_input.trace_add("write", refresh_wizard_state)))
         wizard_trace_ids.append((self.show_help_on_startup, self.show_help_on_startup.trace_add("write", refresh_wizard_state)))
         wizard_trace_ids.append((self.show_success_notifications, self.show_success_notifications.trace_add("write", refresh_wizard_state)))
+        wizard_trace_ids.append((self.play_event_sounds, self.play_event_sounds.trace_add("write", refresh_wizard_state)))
         wizard_trace_ids.append((self.launch_on_windows_startup, self.launch_on_windows_startup.trace_add("write", refresh_wizard_state)))
 
         update_step()
