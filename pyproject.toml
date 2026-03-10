@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto_write_txt_to_docs"
-version = "0.3.0"
+version = "0.5.0"
 authors = [
   { name="122yjs" },
 ]

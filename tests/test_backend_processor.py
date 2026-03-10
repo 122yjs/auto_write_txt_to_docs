@@ -1,3 +1,4 @@
+import json
 import os
 import queue
 import sys
@@ -59,10 +60,14 @@ class FakeTimer:
         self.interval = interval
         self.callback = callback
         self.daemon = False
+        self.cancelled = False
         FakeTimer.instances.append(self)
 
     def start(self):
         return None
+
+    def cancel(self):
+        self.cancelled = True
 
 
 class FakeDocsService:
@@ -90,6 +95,8 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.file_encodings.clear()
         backend_processor.added_lines_cache.clear()
         backend_processor.file_queue = queue.Queue()
+        backend_processor.processed_state_dirty = False
+        backend_processor.processed_state_save_timer = None
         FakeTimer.instances.clear()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
@@ -98,11 +105,16 @@ class BackendProcessorTests(unittest.TestCase):
         self.original_max_global_cache_size = backend_processor.MAX_GLOBAL_CACHE_SIZE
         backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
         backend_processor.LINE_CACHE_FILE = os.path.join(self.temp_dir.name, "added_lines_cache.json")
+        self.timer_patcher = patch.object(backend_processor.threading, "Timer", FakeTimer)
+        self.timer_patcher.start()
 
     def tearDown(self):
+        self.timer_patcher.stop()
         backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
         backend_processor.LINE_CACHE_FILE = self.original_line_cache_file
         backend_processor.MAX_GLOBAL_CACHE_SIZE = self.original_max_global_cache_size
+        backend_processor.processed_state_dirty = False
+        backend_processor.processed_state_save_timer = None
         logging.disable(logging.NOTSET)
 
     def create_temp_file(self, content):
@@ -238,18 +250,25 @@ class BackendProcessorTests(unittest.TestCase):
         filepath = self.create_temp_file("새 데이터 한 줄\n")
         logs = []
 
-        with patch.object(backend_processor.threading, "Timer", FakeTimer):
-            backend_processor.process_file(filepath, {"docs_id": "doc-1"}, None, logs.append)
+        backend_processor.process_file(filepath, {"docs_id": "doc-1"}, None, logs.append)
 
         state = backend_processor.processed_file_states[filepath]
         self.assertNotIn("size", state)
         self.assertNotIn("last_byte_offset", state)
         self.assertTrue(state.get("retry_scheduled"))
-        self.assertEqual(len(FakeTimer.instances), 1)
-        self.assertEqual(FakeTimer.instances[0].interval, backend_processor.RETRY_DELAY)
+        self.assertEqual(len(FakeTimer.instances), 2)
+        self.assertIn(
+            backend_processor.PROCESSED_STATE_SAVE_DEBOUNCE_SECONDS,
+            [timer.interval for timer in FakeTimer.instances],
+        )
+        self.assertIn(
+            backend_processor.RETRY_DELAY,
+            [timer.interval for timer in FakeTimer.instances],
+        )
         self.assertTrue(any("Google Docs 기록 보류" in message for message in logs))
 
-        FakeTimer.instances[0].callback()
+        retry_timer = next(timer for timer in FakeTimer.instances if timer.interval == backend_processor.RETRY_DELAY)
+        retry_timer.callback()
         self.assertEqual(backend_processor.file_queue.get_nowait(), filepath)
         self.assertNotIn("retry_scheduled", backend_processor.processed_file_states[filepath])
 
@@ -258,19 +277,18 @@ class BackendProcessorTests(unittest.TestCase):
         logs = []
         fake_docs_service = FakeDocsService(should_fail=True)
 
-        with patch.object(backend_processor.threading, "Timer", FakeTimer):
-            backend_processor.process_file(
-                filepath,
-                {"docs_id": "doc-2"},
-                {"docs": fake_docs_service},
-                logs.append,
-            )
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-2"},
+            {"docs": fake_docs_service},
+            logs.append,
+        )
 
         state = backend_processor.processed_file_states[filepath]
         self.assertNotIn("size", state)
         self.assertNotIn("last_byte_offset", state)
         self.assertTrue(state.get("retry_scheduled"))
-        self.assertEqual(len(FakeTimer.instances), 1)
+        self.assertEqual(len(FakeTimer.instances), 2)
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("Docs 업데이트 중 예외 발생" in message for message in logs))
 
@@ -479,6 +497,44 @@ class BackendProcessorTests(unittest.TestCase):
             backend_processor.processed_file_states[filepath]["last_byte_offset"],
             os.path.getsize(filepath),
         )
+
+    def test_schedule_processed_state_save_debounces_multiple_changes(self):
+        filepath = self.create_temp_file("상태 저장 디바운스\n")
+        logs = []
+
+        backend_processor.mark_file_processed(filepath, 10, 1.0)
+        backend_processor.schedule_processed_state_save(logs.append)
+        backend_processor.mark_file_processed(filepath, 20, 2.0)
+        backend_processor.schedule_processed_state_save(logs.append)
+
+        self.assertEqual(len(FakeTimer.instances), 2)
+        self.assertTrue(FakeTimer.instances[0].cancelled)
+        self.assertFalse(os.path.exists(backend_processor.PROCESSED_STATE_FILE))
+
+        FakeTimer.instances[-1].callback()
+
+        with open(backend_processor.PROCESSED_STATE_FILE, "r", encoding="utf-8") as saved_file:
+            saved_state = json.load(saved_file)
+
+        self.assertEqual(saved_state[filepath]["last_byte_offset"], 20)
+        self.assertFalse(backend_processor.processed_state_dirty)
+
+    def test_flush_processed_state_save_writes_pending_state_immediately(self):
+        filepath = self.create_temp_file("종료 플러시 테스트\n")
+        logs = []
+
+        backend_processor.mark_file_processed(filepath, 15, 3.0)
+        backend_processor.schedule_processed_state_save(logs.append)
+
+        self.assertTrue(backend_processor.flush_processed_state_save(logs.append))
+        self.assertTrue(os.path.exists(backend_processor.PROCESSED_STATE_FILE))
+        self.assertTrue(FakeTimer.instances[-1].cancelled)
+
+        with open(backend_processor.PROCESSED_STATE_FILE, "r", encoding="utf-8") as saved_file:
+            saved_state = json.load(saved_file)
+
+        self.assertEqual(saved_state[filepath]["last_byte_offset"], 15)
+        self.assertFalse(backend_processor.processed_state_dirty)
 
 
 if __name__ == "__main__":

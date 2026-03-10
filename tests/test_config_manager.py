@@ -30,6 +30,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertTrue(config_data["first_run"])
         self.assertFalse(config_data["launch_on_windows_startup"])
         self.assertTrue(config_data["show_success_notifications"])
+        self.assertTrue(config_data["play_event_sounds"])
         self.assertEqual(config_data["file_extensions"], ".txt")
         self.assertEqual(config_data["max_cache_size"], 5000)
         self.assertNotIn("unknown_key", config_data)
@@ -51,6 +52,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "first_run": False,
                 "launch_on_windows_startup": True,
                 "show_success_notifications": False,
+                "play_event_sounds": False,
                 "max_cache_size": "7500",
             }, config_path=str(config_path))
 
@@ -66,6 +68,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertFalse(loaded_config["first_run"])
         self.assertTrue(loaded_config["launch_on_windows_startup"])
         self.assertFalse(loaded_config["show_success_notifications"])
+        self.assertFalse(loaded_config["play_event_sounds"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)
 
     def test_load_app_config_falls_back_to_legacy_path(self):

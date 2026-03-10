@@ -262,20 +262,39 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     notification_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
         notification_row,
-        text="작업 성공 알림",
+        text="작업 결과 알림",
         width=110,
         anchor="w",
         font=_font(ctk, 13, "bold", family=font_family),
     ).pack(side="left", padx=(0, 8))
     notification_checkbox = ctk.CTkCheckBox(
         notification_row,
-        text="Google Docs 기록 성공 시 트레이 알림 표시",
+        text="작업 결과 알림 표시",
         variable=state_vars["show_success_notifications"],
         onvalue=True,
         offvalue=False,
         font=_font(ctk, 12, family=font_family),
     )
     notification_checkbox.pack(side="left", padx=4)
+
+    sound_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
+    sound_row.pack(fill="x", padx=14, pady=4)
+    ctk.CTkLabel(
+        sound_row,
+        text="작업 결과 효과음",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    sound_checkbox = ctk.CTkCheckBox(
+        sound_row,
+        text="작업 결과 효과음 재생",
+        variable=state_vars["play_event_sounds"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    sound_checkbox.pack(side="left", padx=4)
 
     autostart_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     autostart_row.pack(fill="x", padx=14, pady=4)
