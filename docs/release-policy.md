@@ -22,6 +22,7 @@
 - `developer_credentials.json.example`
 
 넣으면 안 되는 것:
+
 - `token.json`
 - 개인 PC에서 생성된 설정 파일
 - 개인 로그 파일
@@ -77,7 +78,7 @@
 ### 공개용 빌드
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBundledCredentials
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
 ```
 
 이 명령은 실제 `developer_credentials.json`을 포함하고 빌드합니다.
@@ -85,10 +86,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBun
 ### 내부용 빌드
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBundledCredentials
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
 ```
 
-이 명령은 실제 `developer_credentials.json`을 포함할 수 있습니다.
+이 명령은 실제 `developer_credentials.json`을 포함하고 빌드합니다.
+
+### 자격증명 제외 빌드
+
+정책상 기본값은 아니지만, 테스트나 외부 전달 사전 검토 때문에 실제 자격증명을 뺀 빌드가 필요할 때만 아래 명령을 사용합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -ExcludeBundledCredentials
+```
 
 ## 4. 릴리즈 전에 확인할 것
 

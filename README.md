@@ -124,13 +124,13 @@ https://docs.google.com/document/d/문서ID/edit
 
 ### 공개용 릴리즈
 
-- 실제 `developer_credentials.json`을 포함하지 않습니다.
-- 사용자가 직접 Google OAuth 클라이언트 JSON을 준비해야 합니다.
+- 공식 GitHub 릴리즈 기준으로 실제 `developer_credentials.json`을 포함합니다.
+- 일반 사용자는 별도 자격증명 파일을 준비하지 않아도 바로 실행할 수 있습니다.
 - 공개 GitHub 저장소나 외부 배포에 적합합니다.
 
 ### 내부용 릴리즈
 
-- 실제 `developer_credentials.json`을 포함할 수 있습니다.
+- 실제 `developer_credentials.json`을 포함합니다.
 - 사내 테스트나 내부 배포용으로만 사용해야 합니다.
 - 외부 공개 저장소에 그대로 올리면 안 됩니다.
 
@@ -142,7 +142,11 @@ https://docs.google.com/document/d/문서ID/edit
 
 상황에 따라 다릅니다.
 
-### 공개용 빌드나 소스 실행
+### GitHub 릴리즈 실행
+
+보통은 필요하지 않습니다. 공식 릴리즈에는 실제 `developer_credentials.json`이 함께 들어가므로 바로 실행할 수 있습니다.
+
+### 소스 실행 또는 직접 빌드
 
 네, 필요합니다. 아래 두 방법 중 하나로 준비하면 됩니다.
 
@@ -151,11 +155,11 @@ https://docs.google.com/document/d/문서ID/edit
 
 ### 내부용 빌드
 
-내부용으로 만든 빌드에는 파일이 이미 포함될 수 있습니다. 이 경우 사용자가 따로 파일을 넣지 않아도 됩니다.
+내부용으로 만든 빌드도 실제 `developer_credentials.json`을 포함합니다. 차이는 배포 대상과 공유 범위입니다.
 
-## 절대 공개하면 안 되는 파일
+## 절대 저장소에 커밋하면 안 되는 파일
 
-아래 파일은 개인 계정이나 프로젝트 인증 정보가 들어 있으므로 공개 저장소에 올리면 안 됩니다.
+아래 파일은 개인 계정이나 프로젝트 인증 정보가 들어 있으므로 공개 저장소에는 올리면 안 됩니다.
 
 - `developer_credentials.json`
 - `token.json`
@@ -291,15 +295,23 @@ PowerShell에서 아래 명령을 실행합니다.
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
 ```
 
-이 빌드는 실제 `developer_credentials.json`을 포함하지 않습니다.
+이 빌드는 현재 정책상 실제 `developer_credentials.json`을 기본 포함합니다.
 
 ### 내부용 빌드
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -IncludeBundledCredentials
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
 ```
 
-이 빌드는 실제 `developer_credentials.json`을 포함할 수 있으므로 외부 배포에 사용하면 안 됩니다.
+현재 정책상 공개용과 내부용 모두 기본적으로 실제 `developer_credentials.json`을 포함합니다. 차이는 배포 대상과 공유 범위입니다.
+
+### 자격증명 제외 빌드가 필요할 때
+
+실제 자격증명을 뺀 배포물을 따로 확인해야 한다면 아래 명령을 사용합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -ExcludeBundledCredentials
+```
 
 ### 빌드 결과 위치
 

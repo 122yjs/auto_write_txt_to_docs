@@ -65,7 +65,7 @@ jobs:
 
       - name: Build Windows portable package
         shell: pwsh
-        run: .\scripts\build_release.ps1 -PythonExe python -IncludeBundledCredentials
+        run: .\scripts\build_release.ps1 -PythonExe python
 
       - name: Upload release asset
         env:

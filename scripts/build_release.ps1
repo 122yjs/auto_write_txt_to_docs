@@ -1,7 +1,7 @@
 param(
     [string]$PythonExe = "python",
     [string]$AppName = "MessengerDocsAutoWriter",
-    [switch]$IncludeBundledCredentials,
+    [switch]$ExcludeBundledCredentials,
     [switch]$SkipPyInstallerInstall
 )
 
@@ -17,6 +17,8 @@ $OneFilePath = Join-Path $ReleaseRoot "$AppName-standalone.exe"
 $AssetSource = Join-Path $ProjectRoot "src\auto_write_txt_to_docs\assets"
 $StagedAssetDir = Join-Path $BuildRoot "assets_runtime"
 $EntryScript = Join-Path $ProjectRoot "main_gui.py"
+$BundledCredentialsPath = Join-Path $AssetSource "developer_credentials.json"
+$IncludeBundledCredentials = -not $ExcludeBundledCredentials
 
 Write-Host "[1/6] Preparing build directories"
 if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
@@ -27,25 +29,17 @@ New-Item -ItemType Directory -Path $ReleaseRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $StagedAssetDir -Force | Out-Null
 
 Write-Host "[1.1/6] Staging bundled assets"
-Get-ChildItem -Path $AssetSource -File | Where-Object { $_.Name -ne "developer_credentials.json" } | ForEach-Object {
+Get-ChildItem -Path $AssetSource -File | Where-Object { $IncludeBundledCredentials -or $_.Name -ne "developer_credentials.json" } | ForEach-Object {
     Copy-Item $_.FullName (Join-Path $StagedAssetDir $_.Name) -Force
 }
 
 if ($IncludeBundledCredentials) {
-    $BundledCredentialsPath = Join-Path $AssetSource "developer_credentials.json"
     if (-not (Test-Path $BundledCredentialsPath)) {
-        throw "Bundled developer_credentials.json not found."
+        throw "Bundled developer_credentials.json not found. Use -ExcludeBundledCredentials to build without it."
     }
-    Copy-Item $BundledCredentialsPath (Join-Path $StagedAssetDir "developer_credentials.json") -Force
-    Write-Host "  - Internal build: bundled developer credentials included"
+    Write-Host "  - Default build: bundled developer credentials included"
 } else {
-    Write-Host "  - Public build: bundled developer credentials excluded"
-}
-
-Write-Host "[2/6] Preparing PyInstaller"
-if (-not $SkipPyInstallerInstall) {
-    & $PythonExe -m pip install --upgrade pyinstaller
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
+    Write-Host "  - Credentials-excluded build: bundled developer credentials omitted"
 }
 
 Write-Host "[2/6] Preparing PyInstaller"
