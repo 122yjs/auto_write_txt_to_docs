@@ -112,6 +112,12 @@ class BackendProcessorTests(unittest.TestCase):
         temp_file.close()
         return temp_file.name
 
+    def create_named_file(self, filename, content):
+        filepath = os.path.join(self.temp_dir.name, filename)
+        with open(filepath, "w", encoding="utf-8", newline="") as target_file:
+            target_file.write(content)
+        return filepath
+
     def create_temp_bytes_file(self, raw_content):
         temp_file = tempfile.NamedTemporaryFile("wb", delete=False)
         self.addCleanup(lambda: os.path.exists(temp_file.name) and os.remove(temp_file.name))
@@ -213,6 +219,21 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertIn("추출된 시간: 2026-03-05 09:30:15", record["document_text"])
         self.assertEqual(record["preview_text"], "첫 줄\n둘째 줄\n셋째 줄")
 
+    def test_build_duplicate_only_record_mentions_file_title_and_skip_reason(self):
+        filepath = os.path.join(self.temp_dir.name, "중복로그.txt")
+
+        record = backend_processor.build_duplicate_only_record(
+            filepath,
+            7,
+            extracted_at=backend_processor.datetime(2026, 3, 10, 21, 30, 0),
+        )
+
+        self.assertEqual(record["file_title"], "중복로그.txt")
+        self.assertEqual(record["line_count"], 7)
+        self.assertTrue(record["duplicate_only"])
+        self.assertIn("중복 내용으로 본문 추가 없음", record["document_text"])
+        self.assertIn("내용 7줄은 기존 기록과 모두 중복", record["preview_text"])
+
     def test_missing_docs_service_keeps_size_and_schedules_retry(self):
         filepath = self.create_temp_file("새 데이터 한 줄\n")
         logs = []
@@ -285,6 +306,118 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertIn("정상 처리 테스트", extracted_results[0]["full_text"])
         self.assertTrue(any("처리 완료" in message for message in logs))
 
+    def test_duplicate_only_new_file_records_filename_to_docs(self):
+        filepath = self.create_temp_file("중복 줄\n")
+        logs = []
+        fake_docs_service = FakeDocsService()
+        extracted_results = []
+
+        backend_processor.remember_global_lines(["중복 줄"])
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-duplicate"},
+            {"docs": fake_docs_service},
+            logs.append,
+            extracted_result_callback=extracted_results.append,
+        )
+
+        self.assertEqual(len(fake_docs_service.calls), 1)
+        inserted_text = fake_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
+        self.assertIn("본래 파일 제목:", inserted_text)
+        self.assertIn("중복 내용으로 본문 추가 없음", inserted_text)
+        self.assertTrue(any("파일명 기록 시도" in message for message in logs))
+        self.assertTrue(any("중복 파일명 기록 완료" in message for message in logs))
+        self.assertEqual(len(extracted_results), 1)
+        self.assertTrue(extracted_results[0]["duplicate_only"])
+
+    def test_duplicate_only_existing_file_skips_docs_and_logs_reason(self):
+        filepath = self.create_temp_file("같은 줄\n")
+        first_docs_service = FakeDocsService()
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-5"},
+            {"docs": first_docs_service},
+            lambda _message: None,
+        )
+
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+        with open(filepath, "a", encoding="utf-8", newline="") as source_file:
+            source_file.write("같은 줄\n")
+
+        logs = []
+        second_docs_service = FakeDocsService()
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-5"},
+            {"docs": second_docs_service},
+            logs.append,
+        )
+
+        self.assertEqual(len(second_docs_service.calls), 0)
+        self.assertTrue(any("중복 내용만 감지되어 Google Docs 기록 생략" in message for message in logs))
+        self.assertTrue(any("처리 완료" in message for message in logs))
+
+    def test_created_event_resets_existing_state_and_records_duplicate_filename(self):
+        filepath = self.create_named_file("같은이름.txt", "중복 줄\n")
+        first_docs_service = FakeDocsService()
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-reset"},
+            {"docs": first_docs_service},
+            lambda _message: None,
+        )
+
+        backend_processor.remember_global_lines(["중복 줄"])
+        with open(filepath, "w", encoding="utf-8", newline="") as rewritten_file:
+            rewritten_file.write("중복 줄\n")
+
+        logs = []
+        second_docs_service = FakeDocsService()
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-reset"},
+            {"docs": second_docs_service},
+            logs.append,
+            event_type="created",
+        )
+
+        self.assertEqual(len(second_docs_service.calls), 1)
+        inserted_text = second_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
+        self.assertIn("중복 내용으로 본문 추가 없음", inserted_text)
+        self.assertTrue(any("처리 상태를 초기화합니다" in message for message in logs))
+        self.assertTrue(any("중복 파일명 기록 완료" in message for message in logs))
+
+    def test_empty_created_file_does_not_consume_attempt_before_real_write(self):
+        filepath = self.create_named_file("초기빈파일.txt", "")
+        logs = []
+        docs_service = FakeDocsService()
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-empty"},
+            {"docs": docs_service},
+            logs.append,
+            event_type="created",
+        )
+
+        self.assertNotIn(filepath, backend_processor.processed_file_states)
+
+        with open(filepath, "w", encoding="utf-8", newline="") as target_file:
+            target_file.write("이제 내용이 생김\n")
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-empty"},
+            {"docs": docs_service},
+            logs.append,
+            event_type="modified",
+        )
+
+        self.assertEqual(len(docs_service.calls), 1)
+        self.assertTrue(any("처리 완료" in message for message in logs))
+
     def test_save_and_load_processed_state_persists_last_byte_offset(self):
         filepath = self.create_temp_file("상태 저장 테스트\n")
         backend_processor.processed_file_states[filepath] = {
@@ -293,6 +426,8 @@ class BackendProcessorTests(unittest.TestCase):
             "last_attempt_time": 1234.5,
             "seen_line_hashes": {"hash-a", "hash-b"},
             "retry_scheduled": True,
+            "file_ctime_ns": 111,
+            "file_mtime_ns": 222,
         }
 
         backend_processor.save_processed_state(lambda _message: None)
@@ -305,6 +440,8 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(state["last_attempt_time"], 1234.5)
         self.assertEqual(state["seen_line_hashes"], {"hash-a", "hash-b"})
         self.assertFalse(state["retry_scheduled"])
+        self.assertEqual(state["file_ctime_ns"], 111)
+        self.assertEqual(state["file_mtime_ns"], 222)
 
     def test_file_level_dedupe_state_survives_restart(self):
         filepath = self.create_temp_file("같은 줄\n")

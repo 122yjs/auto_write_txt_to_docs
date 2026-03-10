@@ -187,6 +187,26 @@ def extract_docs_update_line_count(message):
     except ValueError:
         return None
 
+
+def extract_filename_from_log_message(message):
+    """백엔드 로그 메시지에서 파일명을 추출한다."""
+    if not isinstance(message, str):
+        return None
+
+    explicit_match = re.search(r'파일:\s*([^,\)]+)', message)
+    if explicit_match:
+        return explicit_match.group(1).strip()
+
+    start_match = re.search(r'처리 시작:\s*(.+)$', message)
+    if start_match:
+        return start_match.group(1).strip()
+
+    complete_match = re.search(r'처리 완료:\s*(.+)$', message)
+    if complete_match:
+        return complete_match.group(1).strip()
+
+    return None
+
 class MessengerDocsApp:
     def __init__(self, root):
         self.root = root
@@ -239,6 +259,7 @@ class MessengerDocsApp:
         self.base_icon_image = None
         self.icon_image = None # 아이콘 이미지 객체 저장
         self.pending_docs_update_line_count = None
+        self.current_processing_filename = None
         
         # 상태 표시 변수
         self.status_var = ctk.StringVar(value="준비")
@@ -1531,9 +1552,11 @@ class MessengerDocsApp:
                     self.update_status("중지됨", f"중지 시간: {current_time_str}")
                 elif "처리 시작:" in msg:
                     filename = msg.split("처리 시작:")[-1].strip()
+                    self.current_processing_filename = filename
                     self.update_status("처리 중", filename)
                 elif "처리 완료:" in msg: # 파일 처리 완료 후 다시 감시 중 상태로
                     self.update_status("감시 중", f"마지막 확인: {current_time_str}")
+                    self.current_processing_filename = None
                 elif "Google Docs에" in msg and "줄 추가 시도" in msg:
                     self.pending_docs_update_line_count = extract_docs_update_line_count(msg)
                 elif "Google Docs 업데이트 완료" in msg:
@@ -1548,10 +1571,37 @@ class MessengerDocsApp:
                     if self.show_success_notifications.get():
                         try:
                             notification_title = "메신저 Docs 자동 기록"
+                            file_label = extract_filename_from_log_message(msg) or self.current_processing_filename
                             if lines_count:
-                                notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
+                                notification_message = f"{file_label}: {lines_count}줄의 새 내용이 Google Docs에 추가되었습니다." if file_label else f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
                             else:
-                                notification_message = "새 내용이 Google Docs에 추가되었습니다."
+                                notification_message = f"{file_label}: 새 내용이 Google Docs에 추가되었습니다." if file_label else "새 내용이 Google Docs에 추가되었습니다."
+                            self.show_tray_notification(notification_title, notification_message)
+                        except Exception as e:
+                            self.log(f"알림 처리 중 오류: {e}")
+                elif "Google Docs 중복 파일명 기록 완료" in msg:
+                    duplicate_filename = extract_filename_from_log_message(msg) or self.current_processing_filename
+                    self.update_status("중복 파일명 기록", duplicate_filename or "파일명 기록 완료")
+                    if self.show_success_notifications.get():
+                        try:
+                            notification_title = "메신저 Docs 자동 기록"
+                            if duplicate_filename:
+                                notification_message = f"{duplicate_filename}: 본문은 중복이라 생략하고 파일명만 기록했습니다."
+                            else:
+                                notification_message = "본문은 중복이라 생략하고 파일명만 기록했습니다."
+                            self.show_tray_notification(notification_title, notification_message)
+                        except Exception as e:
+                            self.log(f"알림 처리 중 오류: {e}")
+                elif "중복 내용만 감지되어 Google Docs 기록 생략" in msg:
+                    duplicate_filename = extract_filename_from_log_message(msg) or self.current_processing_filename
+                    self.update_status("중복으로 기록 안 함", duplicate_filename or "중복 내용")
+                    if self.show_success_notifications.get():
+                        try:
+                            notification_title = "메신저 Docs 자동 기록"
+                            if duplicate_filename:
+                                notification_message = f"{duplicate_filename}: 모든 내용이 중복되어 추가 기록이 없습니다."
+                            else:
+                                notification_message = "모든 내용이 중복되어 추가 기록이 없습니다."
                             self.show_tray_notification(notification_title, notification_message)
                         except Exception as e:
                             self.log(f"알림 처리 중 오류: {e}")
@@ -1567,8 +1617,6 @@ class MessengerDocsApp:
                     or "인증 정보(토큰) 갱신 실패" in msg
                 ):
                     error_detail = "Google 인증 오류"
-                elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
-                    self.pending_docs_update_line_count = None
                 elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
                     self.pending_docs_update_line_count = None
                     error_detail = "Docs API 오류"

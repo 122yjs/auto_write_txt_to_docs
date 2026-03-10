@@ -129,9 +129,78 @@ def build_extraction_record(filepath, extracted_lines, extracted_at=None):
     }
 
 
+def build_duplicate_only_record(filepath, duplicate_line_count, extracted_at=None):
+    """내용이 전부 중복인 새 파일의 파일명만 기록하는 문자열을 생성합니다."""
+    extracted_datetime = extracted_at or datetime.now()
+    extracted_time_text = extracted_datetime.strftime('%Y-%m-%d %H:%M:%S')
+    file_title = os.path.basename(filepath)
+    duplicate_line_count = max(0, int(duplicate_line_count))
+    summary_text = (
+        f"이 파일의 내용 {duplicate_line_count}줄은 기존 기록과 모두 중복되어 "
+        "본문 추가를 생략했습니다."
+    )
+
+    header = (
+        f"\n{'#' * 60}\n"
+        f"# 본래 파일 제목: {file_title}\n"
+        f"# 추출된 시간: {extracted_time_text}\n"
+        f"# 처리 결과: 중복 내용으로 본문 추가 없음\n"
+        f"{'#' * 60}\n"
+    )
+
+    return {
+        'file_title': file_title,
+        'extracted_time': extracted_time_text,
+        'line_count': duplicate_line_count,
+        'preview_text': summary_text,
+        'full_text': summary_text,
+        'document_text': header + summary_text + "\n\n",
+        'duplicate_only': True,
+    }
+
+
 def get_file_state(filepath):
     """파일별 처리 상태 딕셔너리를 반환합니다."""
     return processed_file_states.setdefault(filepath, {})
+
+
+def build_file_identity_from_stat(stat_result):
+    """현재 파일의 생성/수정 시각 식별자를 정규화합니다."""
+    ctime_ns = getattr(stat_result, 'st_ctime_ns', int(stat_result.st_ctime * 1_000_000_000))
+    mtime_ns = getattr(stat_result, 'st_mtime_ns', int(stat_result.st_mtime * 1_000_000_000))
+    return {
+        'file_ctime_ns': max(0, int(ctime_ns)),
+        'file_mtime_ns': max(0, int(mtime_ns)),
+    }
+
+
+def detect_file_reset_reason(filepath, current_identity, event_type=None):
+    """이전 상태를 초기화해야 하는 파일 재생성/교체 상황인지 판정합니다."""
+    state = processed_file_states.get(filepath)
+    if not state:
+        return None
+
+    last_byte_offset = int(state.get('last_byte_offset', state.get('size', 0)) or 0)
+    seen_hashes = state.get('seen_line_hashes') or set()
+    has_previous_progress = last_byte_offset > 0 or bool(seen_hashes)
+    if not has_previous_progress:
+        return None
+
+    if event_type == 'created':
+        return "created_event"
+
+    stored_ctime_ns = state.get('file_ctime_ns')
+    current_ctime_ns = current_identity.get('file_ctime_ns')
+    try:
+        stored_ctime_ns = int(stored_ctime_ns)
+        current_ctime_ns = int(current_ctime_ns)
+    except (TypeError, ValueError):
+        return None
+
+    if stored_ctime_ns > 0 and current_ctime_ns > 0 and stored_ctime_ns != current_ctime_ns:
+        return "ctime_changed"
+
+    return None
 
 
 def hash_line_for_dedupe(line):
@@ -201,13 +270,33 @@ def mark_processing_attempt(filepath, current_time):
         del state['timestamp']
 
 
-def mark_file_processed(filepath, current_byte_offset, current_time):
+def reset_file_processing_state(filepath):
+    """같은 경로의 새 파일이 감지되면 이전 처리 상태를 초기화합니다."""
+    state = get_file_state(filepath)
+    state.pop('last_byte_offset', None)
+    state.pop('size', None)
+    state.pop('last_attempt_time', None)
+    state.pop('retry_scheduled', None)
+    state.pop('file_ctime_ns', None)
+    state.pop('file_mtime_ns', None)
+    state['seen_line_hashes'] = set()
+    if 'timestamp' in state:
+        del state['timestamp']
+
+    if filepath in file_encodings:
+        del file_encodings[filepath]
+
+
+def mark_file_processed(filepath, current_byte_offset, current_time, file_identity=None):
     """파일이 안전하게 처리된 후 바이트 오프셋 상태를 확정합니다."""
     state = get_file_state(filepath)
     state['last_byte_offset'] = current_byte_offset
     state['size'] = current_byte_offset
     state['last_attempt_time'] = current_time
     state['retry_scheduled'] = False
+    if file_identity:
+        state['file_ctime_ns'] = int(file_identity.get('file_ctime_ns', 0) or 0)
+        state['file_mtime_ns'] = int(file_identity.get('file_mtime_ns', 0) or 0)
     if 'timestamp' in state:
         del state['timestamp']
 
@@ -287,6 +376,8 @@ def load_processed_state(log_func):
                     str(item) for item in state.get('seen_line_hashes', []) if item
                 },
                 'retry_scheduled': False,
+                'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
+                'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
             }
 
         processed_file_states = sanitized_state
@@ -311,6 +402,8 @@ def save_processed_state(log_func):
             'seen_line_hashes': sorted(
                 str(item) for item in state.get('seen_line_hashes', set()) if item
             ),
+            'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
+            'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
         }
 
     try:
@@ -506,45 +599,63 @@ class FileEventHandler(FileSystemEventHandler):
             
         self.log_func(f"파일 감지됨 ({event.event_type}): {os.path.basename(filepath)}")
         self.backend_logger.info(f"파일 감지됨 ({event.event_type}): {filepath}")
-        file_queue.put(filepath) # 처리 큐에 파일 경로 추가
+        file_queue.put((filepath, event.event_type)) # 처리 큐에 파일 경로 추가
         
     def on_created(self, event): self.process(event)
     def on_modified(self, event): self.process(event)
 
 # --- 핵심 파일 처리 함수 (Docs 기록 버전) ---
-def process_file(filepath, config, services, log_func, extracted_result_callback=None):
+def process_file(filepath, config, services, log_func, extracted_result_callback=None, event_type=None):
     """ 감지된 파일을 읽고, 중복 제거 후 Google Docs에 기록 """
     # 백엔드 로거 가져오기
     backend_logger = logging.getLogger('backend_processor')
-    
-    # 처리 시작 시간 기록 및 중복 실행 방지
-    current_time = time.time()
-    last_processed_time = get_last_attempt_time(filepath)
-    if current_time - last_processed_time < PROCESSING_DELAY:
-        backend_logger.debug(f"짧은 시간 내 재처리 방지: {os.path.basename(filepath)}")
-        return # 짧은 시간 내 재처리 방지
-
-    mark_processing_attempt(filepath, current_time)
-    log_func(f"처리 시작: {os.path.basename(filepath)}")
-    backend_logger.info(f"파일 처리 시작: {filepath}")
     # 필요한 서비스 및 설정 가져오기
     docs_service = services.get('docs') if services else None
     docs_id = config.get('docs_id')
 
     try:
         # --- 1. 새로운 내용 식별 ---
-        current_byte_size = os.path.getsize(filepath)
+        current_time = time.time()
+        current_stat = os.stat(filepath)
+        current_identity = build_file_identity_from_stat(current_stat)
+        reset_reason = detect_file_reset_reason(filepath, current_identity, event_type=event_type)
+        if reset_reason:
+            reset_file_processing_state(filepath)
+            file_title = os.path.basename(filepath)
+            if reset_reason == "created_event":
+                log_func(f"  - 같은 경로의 새 파일 생성이 감지되어 이전 처리 상태를 초기화합니다: {file_title}")
+                backend_logger.info(f"같은 경로의 새 파일 생성 감지 - 처리 상태 초기화: {filepath}")
+            else:
+                log_func(f"  - 파일 재생성이 감지되어 이전 처리 상태를 초기화합니다: {file_title}")
+                backend_logger.info(f"파일 재생성 감지 - 처리 상태 초기화: {filepath}")
+
+        current_byte_size = current_stat.st_size
         last_byte_offset = get_last_successful_offset(filepath)
         new_raw_content = None
 
         if current_byte_size > last_byte_offset:
+            last_processed_time = get_last_attempt_time(filepath)
+            if current_time - last_processed_time < PROCESSING_DELAY:
+                backend_logger.debug(f"짧은 시간 내 재처리 방지: {os.path.basename(filepath)}")
+                return # 짧은 시간 내 재처리 방지
+
+            mark_processing_attempt(filepath, current_time)
+            log_func(f"처리 시작: {os.path.basename(filepath)}")
+            backend_logger.info(f"파일 처리 시작: {filepath}")
             new_raw_content = read_file_with_multiple_encodings(filepath, last_byte_offset, log_func)
         elif current_byte_size < last_byte_offset:
+            last_processed_time = get_last_attempt_time(filepath)
+            if current_time - last_processed_time < PROCESSING_DELAY:
+                backend_logger.debug(f"짧은 시간 내 재처리 방지: {os.path.basename(filepath)}")
+                return # 짧은 시간 내 재처리 방지
+
+            mark_processing_attempt(filepath, current_time)
+            log_func(f"처리 시작: {os.path.basename(filepath)}")
+            backend_logger.info(f"파일 처리 시작: {filepath}")
             log_func(f"  - 파일 크기 감소 감지. 전체 내용 다시 읽기...")
-            # 파일이 다시 작성되었을 가능성이 있으므로 인코딩 정보 초기화
-            if filepath in file_encodings:
-                backend_logger.info(f"파일 크기 감소로 인해 '{os.path.basename(filepath)}'의 인코딩 정보 초기화")
-                del file_encodings[filepath]
+            backend_logger.info(f"파일 크기 감소로 인해 '{os.path.basename(filepath)}'의 처리 상태 초기화")
+            reset_file_processing_state(filepath)
+            last_byte_offset = 0
             new_raw_content = read_file_with_multiple_encodings(filepath, 0, log_func)
         else: # 크기 변경 없음
             return
@@ -552,31 +663,81 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_byte_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             save_processed_state(log_func)
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
         if not new_lines:
             backend_logger.debug(f"처리할 새 라인 없음: {os.path.basename(filepath)}")
-            mark_file_processed(filepath, current_byte_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             save_processed_state(log_func)
             return
 
         # --- 2. 라인 캐시 기반 중복 제거 ---
         global added_lines_cache
         file_seen_hashes = get_file_seen_hashes(filepath)
+        should_record_duplicate_file_marker = last_byte_offset == 0 and not file_seen_hashes
         truly_new_lines = [
             line for line in new_lines
             if line not in added_lines_cache and hash_line_for_dedupe(line) not in file_seen_hashes
         ]
 
         if not truly_new_lines: # 추가할 새 라인 없음
-            backend_logger.debug(f"라인 캐시 비교 후 추가할 내용 없음: {os.path.basename(filepath)}")
+            duplicate_line_count = len(new_lines)
+            file_title = os.path.basename(filepath)
+            if should_record_duplicate_file_marker:
+                if not docs_id:
+                    schedule_retry(filepath, log_func, "중복 새 파일의 파일명 기록을 위한 Google Docs 문서 ID가 없습니다", current_time)
+                    return
+
+                if not docs_service:
+                    schedule_retry(filepath, log_func, "중복 새 파일의 파일명 기록을 위한 Google Docs 서비스가 준비되지 않았습니다", current_time)
+                    return
+
+                log_func(
+                    f"  - 중복 내용만 감지됨. 파일명 기록 시도 (파일: {file_title}, 중복 {duplicate_line_count}줄)"
+                )
+                duplicate_record = build_duplicate_only_record(filepath, duplicate_line_count)
+                try:
+                    requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': duplicate_record['document_text']}}]
+                    docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
+                    log_func(
+                        f"  - Google Docs 중복 파일명 기록 완료 (파일: {file_title}, 중복 {duplicate_line_count}줄)"
+                    )
+                    backend_logger.info(
+                        f"Google Docs 중복 파일명 기록 완료: {file_title} / 중복 {duplicate_line_count}줄"
+                    )
+                    if extracted_result_callback:
+                        try:
+                            extracted_result_callback(duplicate_record)
+                        except Exception as callback_error:
+                            backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
+                except HttpError as error:
+                    log_func(f"오류: Docs 업데이트 API 오류 - {error}")
+                    backend_logger.error(f"Docs 업데이트 API 오류: {error}")
+                    schedule_retry(filepath, log_func, "중복 새 파일 파일명 기록 중 Google Docs API 오류", current_time)
+                    return
+                except Exception as e:
+                    log_func(f"오류: Docs 업데이트 중 예외 발생 - {e}")
+                    backend_logger.error(f"Docs 업데이트 중 예외 발생: {e}", exc_info=True)
+                    log_func(traceback.format_exc())
+                    schedule_retry(filepath, log_func, "중복 새 파일 파일명 기록 중 Google Docs 업데이트 예외", current_time)
+                    return
+            else:
+                log_func(
+                    f"  - 중복 내용만 감지되어 Google Docs 기록 생략 (파일: {file_title}, 중복 {duplicate_line_count}줄)"
+                )
+                backend_logger.info(
+                    f"중복 내용만 감지되어 Google Docs 기록 생략: {file_title} / 중복 {duplicate_line_count}줄"
+                )
+
             remember_global_lines(new_lines)
             remember_file_lines(filepath, new_lines)
-            mark_file_processed(filepath, current_byte_size, current_time)
+            mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             save_processed_state(log_func)
+            log_func(f"처리 완료: {os.path.basename(filepath)}")
+            backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
             return
 
         filtered_content = "\n".join(truly_new_lines) # Docs에 추가할 실제 내용
@@ -593,13 +754,19 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         extraction_record = build_extraction_record(filepath, truly_new_lines)
         text_to_insert = extraction_record['document_text']
 
-        log_func(f"  - Google Docs에 {len(truly_new_lines)}줄 추가 시도 (ID: {docs_id})...")
+        log_func(
+            f"  - Google Docs에 {len(truly_new_lines)}줄 추가 시도 (파일: {os.path.basename(filepath)}, ID: {docs_id})..."
+        )
         try:
             # 단일 insertText 요청 사용
             requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': text_to_insert}}]
             docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
-            log_func(f"  - Google Docs 업데이트 완료.")
-            backend_logger.info(f"Google Docs 업데이트 완료: {len(truly_new_lines)}줄 추가")
+            log_func(
+                f"  - Google Docs 업데이트 완료 (파일: {os.path.basename(filepath)}, {len(truly_new_lines)}줄 추가)"
+            )
+            backend_logger.info(
+                f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(truly_new_lines)}줄 추가"
+            )
         except HttpError as error:
             log_func(f"오류: Docs 업데이트 API 오류 - {error}")
             backend_logger.error(f"Docs 업데이트 API 오류: {error}")
@@ -624,7 +791,7 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                 backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
 
         # --- 5. 최종 상태 업데이트 ---
-        mark_file_processed(filepath, current_byte_size, current_time)
+        mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
         save_processed_state(log_func)
         log_func(f"처리 완료: {os.path.basename(filepath)}")
         backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
@@ -730,7 +897,12 @@ def run_monitoring(
     try:
         while not stop_event.is_set():
             try:
-                filepath = file_queue.get_nowait()
+                queue_item = file_queue.get_nowait()
+                if isinstance(queue_item, tuple):
+                    filepath, event_type = queue_item
+                else:
+                    filepath = queue_item
+                    event_type = None
                 # 파일 처리 함수 호출
                 backend_logger.info(f"파일 처리 시작: {os.path.basename(filepath)}")
                 process_file(
@@ -739,6 +911,7 @@ def run_monitoring(
                     google_services,
                     log_func_threadsafe,
                     extracted_result_callback=extracted_result_callback,
+                    event_type=event_type,
                 )
                 backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
                 file_queue.task_done() # 큐 작업 완료 알림
