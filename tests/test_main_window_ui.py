@@ -17,6 +17,7 @@ class MainWindowUiTests(unittest.TestCase):
     def test_main_window_ui_keeps_font_helper_and_workspace_copy(self):
         self.assertIn("def _font", self.source)
         self.assertIn("if family:", self.source)
+        self.assertIn("CTkScrollableFrame", self.source)
         self.assertIn("Messenger Docs Workspace", self.source)
         self.assertIn("작업 설정", self.source)
         self.assertIn("watch_folder_drop_hint", self.source)

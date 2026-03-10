@@ -40,7 +40,16 @@ except ModuleNotFoundError:
     sys.modules["googleapiclient"] = googleapiclient_module
     sys.modules["googleapiclient.errors"] = googleapiclient_errors_module
 
+_original_google_auth_module = sys.modules.get("src.auto_write_txt_to_docs.google_auth")
+if _original_google_auth_module is None:
+    google_auth_stub = types.ModuleType("src.auto_write_txt_to_docs.google_auth")
+    google_auth_stub.get_google_services = None
+    sys.modules["src.auto_write_txt_to_docs.google_auth"] = google_auth_stub
+
 from src.auto_write_txt_to_docs import backend_processor
+
+if _original_google_auth_module is None:
+    sys.modules.pop("src.auto_write_txt_to_docs.google_auth", None)
 
 
 class FakeTimer:

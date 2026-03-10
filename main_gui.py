@@ -154,7 +154,6 @@ def format_google_modified_time(modified_time_text):
     except ValueError:
         return modified_time_text
 
-
 def detect_ui_font_family(root):
     """현재 플랫폼에서 사용 가능한 한글 친화 UI 폰트를 선택한다."""
     platform_candidates = {
@@ -173,6 +172,20 @@ def detect_ui_font_family(root):
             return candidate
 
     return None
+
+def extract_docs_update_line_count(message):
+    """Docs 업데이트 관련 로그에서 줄 수를 추출한다."""
+    if not isinstance(message, str):
+        return None
+
+    match = re.search(r'(\d+)줄 추가', message)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 class MessengerDocsApp:
     def __init__(self, root):
@@ -225,6 +238,7 @@ class MessengerDocsApp:
         self.tray_thread = None
         self.base_icon_image = None
         self.icon_image = None # 아이콘 이미지 객체 저장
+        self.pending_docs_update_line_count = None
         
         # 상태 표시 변수
         self.status_var = ctk.StringVar(value="준비")
@@ -1024,6 +1038,7 @@ class MessengerDocsApp:
                 "show_success_notifications": self.show_success_notifications,
                 "docs_input": self.docs_input,
                 "docs_target_status_var": self.docs_target_status_var,
+                "show_success_notifications": self.show_success_notifications,
             },
             callbacks={
                 "optimize_memory": self.optimize_memory,
@@ -1204,7 +1219,7 @@ class MessengerDocsApp:
         if self.tray_icon and hasattr(self.tray_icon, 'notify'):
             try:
                 # 트레이 아이콘이 실행 중이고 notify 메서드가 있는 경우
-                self.tray_icon.notify(title, message)
+                self.tray_icon.notify(message, title)
                 self.log(f"트레이 알림 표시: {title}")
             except Exception as e:
                 self.log(f"트레이 알림 표시 실패: {e}")
@@ -1519,23 +1534,24 @@ class MessengerDocsApp:
                     self.update_status("처리 중", filename)
                 elif "처리 완료:" in msg: # 파일 처리 완료 후 다시 감시 중 상태로
                     self.update_status("감시 중", f"마지막 확인: {current_time_str}")
+                elif "Google Docs에" in msg and "줄 추가 시도" in msg:
+                    self.pending_docs_update_line_count = extract_docs_update_line_count(msg)
                 elif "Google Docs 업데이트 완료" in msg:
                     self.update_status("Docs 업데이트 완료", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
                     if self.is_monitoring:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
                     
-                    # 트레이 알림 표시
-                    if "줄 추가" in msg and self.show_success_notifications.get():
+                    # 실제 성공 시점에만 트레이 알림 표시
+                    lines_count = extract_docs_update_line_count(msg) or self.pending_docs_update_line_count
+                    self.pending_docs_update_line_count = None
+                    if self.show_success_notifications.get():
                         try:
-                            # 추가된 줄 수 추출
-                            import re
-                            match = re.search(r'(\d+)줄 추가', msg)
-                            lines_count = match.group(1) if match else "새로운"
-                            
-                            # 알림 표시
                             notification_title = "메신저 Docs 자동 기록"
-                            notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
+                            if lines_count:
+                                notification_message = f"{lines_count}줄의 새 내용이 Google Docs에 추가되었습니다."
+                            else:
+                                notification_message = "새 내용이 Google Docs에 추가되었습니다."
                             self.show_tray_notification(notification_title, notification_message)
                         except Exception as e:
                             self.log(f"알림 처리 중 오류: {e}")
@@ -1552,6 +1568,9 @@ class MessengerDocsApp:
                 ):
                     error_detail = "Google 인증 오류"
                 elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
+                    self.pending_docs_update_line_count = None
+                elif "오류: Docs 업데이트 API 오류" in msg or "오류: Docs 업데이트 중 예외 발생" in msg:
+                    self.pending_docs_update_line_count = None
                     error_detail = "Docs API 오류"
                 elif "오류: 파일 처리 중 사라짐" in msg:
                     error_detail = "파일 접근 오류"

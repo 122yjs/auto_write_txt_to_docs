@@ -258,7 +258,6 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray72"),
     ).pack(side="left", padx=(8, 0))
-
     notification_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     notification_row.pack(fill="x", padx=18, pady=6)
     ctk.CTkLabel(
@@ -308,7 +307,6 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         justify="left",
     )
     autostart_hint_label.pack(fill="x", padx=(118, 0))
-
     doc_title_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     doc_title_row.pack(fill="x", padx=18, pady=(10, 4))
     ctk.CTkLabel(
@@ -680,12 +678,19 @@ def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_fa
     main_frame = ctk.CTkFrame(parent, fg_color="transparent")
     main_frame.pack(padx=18, pady=18, fill="both", expand=True)
 
-    widget_refs = {}
-    widget_refs.update(_build_status_panel(ctk, main_frame, state_vars, callbacks, font_family))
-    widget_refs.update(_build_settings_panel(ctk, main_frame, state_vars, callbacks, font_family))
-    widget_refs.update(_build_control_panel(ctk, main_frame, callbacks, font_family))
+    main_scroll_frame = ctk.CTkScrollableFrame(
+        main_frame,
+        fg_color="transparent",
+        corner_radius=0,
+    )
+    main_scroll_frame.pack(fill="both", expand=True)
 
-    workspace_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+    widget_refs = {}
+    widget_refs.update(_build_status_panel(ctk, main_scroll_frame, state_vars, callbacks, font_family))
+    widget_refs.update(_build_settings_panel(ctk, main_scroll_frame, state_vars, callbacks, font_family))
+    widget_refs.update(_build_control_panel(ctk, main_scroll_frame, callbacks, font_family))
+
+    workspace_frame = ctk.CTkFrame(main_scroll_frame, fg_color="transparent")
     workspace_frame.pack(fill="both", expand=True)
 
     result_column = ctk.CTkFrame(workspace_frame, fg_color="transparent")
@@ -697,5 +702,6 @@ def build_main_window_ui(parent, state_vars, callbacks, ctk_module=None, font_fa
     widget_refs.update(_build_result_panel(ctk, result_column, callbacks, font_family))
     widget_refs.update(_build_log_panel(ctk, log_column, callbacks, font_family))
     widget_refs["main_frame"] = main_frame
+    widget_refs["main_scroll_frame"] = main_scroll_frame
     widget_refs["workspace_frame"] = workspace_frame
     return widget_refs
