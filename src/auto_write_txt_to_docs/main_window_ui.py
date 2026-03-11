@@ -167,7 +167,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         font=_font(ctk, 13, family=font_family),
     )
     watch_folder_entry.pack(side="left", fill="x", expand=True, padx=4)
-    ctk.CTkButton(
+    watch_folder_browse_button = ctk.CTkButton(
         folder_row,
         text="폴더 선택",
         width=88,
@@ -175,8 +175,9 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         corner_radius=10,
         command=callbacks["browse_folder"],
         font=_font(ctk, 12, "bold", family=font_family),
-    ).pack(side="left", padx=(8, 0))
-    ctk.CTkButton(
+    )
+    watch_folder_browse_button.pack(side="left", padx=(8, 0))
+    watch_folder_open_button = ctk.CTkButton(
         folder_row,
         text="열기",
         width=60,
@@ -187,7 +188,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         fg_color=("gray85", "gray28"),
         hover_color=("gray78", "gray34"),
         text_color=("gray20", "gray92"),
-    ).pack(side="left", padx=(8, 0))
+    )
+    watch_folder_open_button.pack(side="left", padx=(8, 0))
 
     folder_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     folder_hint_row.pack(fill="x", padx=14, pady=(0, 4))
@@ -427,6 +429,8 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     return {
         "settings_frame": settings_frame,
         "watch_folder_entry": watch_folder_entry,
+        "watch_folder_browse_button": watch_folder_browse_button,
+        "watch_folder_open_button": watch_folder_open_button,
         "watch_folder_drop_hint_label": watch_folder_drop_hint_label,
         "max_cache_size_entry": max_cache_size_entry,
         "notification_checkbox": notification_checkbox,
