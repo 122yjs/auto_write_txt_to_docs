@@ -79,8 +79,18 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn('"watch_folder_browse_button": watch_folder_browse_button', self.source)
         self.assertIn('"watch_folder_open_button": watch_folder_open_button', self.source)
         self.assertIn('"cache_folder_button": cache_folder_button', self.source)
+        self.assertIn("advanced_filter_button = ctk.CTkButton(", self.source)
+        self.assertIn("backup_restore_button = ctk.CTkButton(", self.source)
         self.assertIn('_attach_tooltip(', self.source)
         self.assertIn("전역 라인 캐시와 처리 상태 파일이 저장된 폴더를 Windows 탐색기에서 엽니다.", self.source)
+        self.assertIn("현재 앱 메모리 사용량을 점검하고 가능한 정리 작업을 실행합니다.", self.source)
+        self.assertIn("확장자 외에 정규식과 세부 필터 조건을 추가로 설정합니다.", self.source)
+        self.assertIn("현재 계정에서 접근 가능한 Google Docs 목록을 불러와 작업 문서를 선택합니다.", self.source)
+        self.assertIn("현재 입력된 문서를 작업 대상으로 고정해 감시 시작 전에 다시 바뀌지 않게 합니다.", self.source)
+        self.assertIn("작업 로그를 별도 창으로 열어 좁은 화면에서도 편하게 확인합니다.", self.source)
+        self.assertIn("현재 설정을 백업 파일로 저장하거나 이전 백업 설정을 불러옵니다.", self.source)
+        self.assertIn("화면에 표시된 로그만 지우며 저장된 로그 파일은 삭제하지 않습니다.", self.source)
+        self.assertIn("현재 표시 중인 최근 추출 결과만 지우며 원본 기록과 문서 내용은 유지합니다.", self.source)
 
 
 if __name__ == "__main__":
