@@ -29,6 +29,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertTrue(config_data["use_regex_filter"])
         self.assertTrue(config_data["first_run"])
         self.assertFalse(config_data["launch_on_windows_startup"])
+        self.assertTrue(config_data["check_updates_on_startup"])
         self.assertTrue(config_data["show_success_notifications"])
         self.assertTrue(config_data["play_event_sounds"])
         self.assertEqual(config_data["file_extensions"], ".txt")
@@ -51,6 +52,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "appearance_mode": "Dark",
                 "first_run": False,
                 "launch_on_windows_startup": True,
+                "check_updates_on_startup": False,
                 "show_success_notifications": False,
                 "play_event_sounds": False,
                 "max_cache_size": "7500",
@@ -67,6 +69,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertEqual(loaded_config, saved_config)
         self.assertFalse(loaded_config["first_run"])
         self.assertTrue(loaded_config["launch_on_windows_startup"])
+        self.assertFalse(loaded_config["check_updates_on_startup"])
         self.assertFalse(loaded_config["show_success_notifications"])
         self.assertFalse(loaded_config["play_event_sounds"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)

@@ -62,6 +62,7 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("CACHE_FILE_STR", self.main_gui_source)
         self.assertIn("first_run", self.main_gui_source)
         self.assertIn("launch_on_windows_startup", self.main_gui_source)
+        self.assertIn("check_updates_on_startup", self.main_gui_source)
         self.assertIn("autostart_hint", self.main_gui_source)
         self.assertIn("self._suppress_autostart_trace = False", self.main_gui_source)
         self.assertIn("show_success_notifications", self.main_gui_source)
@@ -79,6 +80,9 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("3. 알림 및 마무리", self.main_gui_source)
         self.assertIn("나중에", self.main_gui_source)
         self.assertIn("Windows 자동 실행: {'켜짐' if self.launch_on_windows_startup.get() else '꺼짐'}", self.main_gui_source)
+        self.assertIn('label="시작 시 새 버전 확인"', self.main_gui_source)
+        self.assertIn('label="새 버전 확인"', self.main_gui_source)
+        self.assertIn("def check_for_updates", self.main_gui_source)
         self.assertIn('text="스위치를 바꾸면 Windows 시작프로그램 등록 상태가 바로 반영됩니다."', self.main_gui_source)
         self.assertIn("def configure_log_tags", self.main_gui_source)
         self.assertIn("def get_log_tag_name", self.main_gui_source)
@@ -103,6 +107,10 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn('text="로그 팝업"', self.main_window_ui_source)
         self.assertIn('"open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR))', self.main_gui_source)
         self.assertIn('self.launch_on_windows_startup.trace_add("write", self.on_windows_startup_setting_changed)', self.main_gui_source)
+        self.assertLess(
+            self.main_gui_source.index("self.check_updates_on_startup = tk.BooleanVar(value=True)"),
+            self.main_gui_source.index("self._create_menubar()"),
+        )
 
 
 if __name__ == "__main__":

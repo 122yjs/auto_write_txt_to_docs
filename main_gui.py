@@ -136,6 +136,16 @@ except ImportError:
     show_help_dialog_window = None
     show_theme_settings_dialog = None
 
+try:
+    from src.auto_write_txt_to_docs.update_checker import (
+        REPOSITORY_RELEASES_URL,
+        check_for_new_release,
+    )
+except ImportError:
+    logging.error("업데이트 확인 모듈(update_checker.py)을 찾을 수 없습니다.")
+    REPOSITORY_RELEASES_URL = "https://github.com/122yjs/auto_write_txt_to_docs/releases"
+    check_for_new_release = None
+
 
 if TkinterDnD:
     class DnDCompatibleTk(ctk.CTk, TkinterDnD.DnDWrapper):
@@ -396,9 +406,6 @@ class MessengerDocsApp:
         self.root.geometry("980x750")
         self.root.minsize(980, 750)
 
-        # --- 상단 메뉴바 생성 ---
-        self._create_menubar()
-
         # 테마 설정 (⚠️ 수정: 중복 선언이었던 L137의 두 번째 선언 제거)
         self.appearance_mode = ctk.StringVar(value="System")  # 기본값: 시스템 설정 따름
         ctk.set_appearance_mode(self.appearance_mode.get())
@@ -411,9 +418,11 @@ class MessengerDocsApp:
         # --- 변수 선언 ---
         self.first_run = tk.BooleanVar(value=True)
         self.launch_on_windows_startup = tk.BooleanVar(value=False)
+        self.check_updates_on_startup = tk.BooleanVar(value=True)
         self.watch_folder = ctk.StringVar()
         self.watch_folder_drop_hint = ctk.StringVar(value="폴더를 여기로 끌어다 놓거나 '폴더 선택' 버튼을 사용하세요.")
         self.autostart_hint = ctk.StringVar(value="Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
+        self.update_check_status = ctk.StringVar(value=self.get_default_update_check_status())
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
@@ -442,6 +451,8 @@ class MessengerDocsApp:
         self.pending_docs_update_line_count = None
         self.current_processing_filename = None
         self.recent_failure_notifications = {}
+        self.latest_release_info = None
+        self._update_check_in_progress = False
         
         # 상태 표시 변수
         self.status_var = ctk.StringVar(value="준비")
@@ -454,6 +465,7 @@ class MessengerDocsApp:
         self._suppress_autostart_trace = False
         self.first_run.trace_add("write", self.on_setting_changed)
         self.launch_on_windows_startup.trace_add("write", self.on_windows_startup_setting_changed)
+        self.check_updates_on_startup.trace_add("write", self.on_update_check_preference_changed)
         self.watch_folder.trace_add("write", self.on_setting_changed)
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
@@ -461,6 +473,9 @@ class MessengerDocsApp:
         self.play_event_sounds.trace_add("write", self.on_setting_changed)
         self.max_cache_size.trace_add("write", self.on_setting_changed)
         self.settings_changed = False
+
+        # --- 상단 메뉴바 생성 ---
+        self._create_menubar()
 
         # --- 아이콘 이미지 생성 또는 로드 ---
         self.create_or_load_icon() # 함수 이름 변경
@@ -518,6 +533,40 @@ class MessengerDocsApp:
         except tk.TclError:
             pass
 
+    def get_default_update_check_status(self):
+        """최신 버전 확인 기본 안내 문구를 반환한다."""
+        if not check_for_new_release:
+            return "업데이트 확인 기능을 사용할 수 없습니다. 프로그램 파일 구성을 확인하세요."
+        return "앱 시작 시 GitHub 공식 릴리즈를 확인합니다. '지금 확인'으로 수동 검사할 수 있습니다."
+
+    def refresh_update_check_status(self):
+        """현재 설정과 마지막 확인 결과를 바탕으로 안내 문구를 갱신한다."""
+        if not check_for_new_release:
+            self.update_check_status.set("업데이트 확인 기능을 사용할 수 없습니다. 프로그램 파일 구성을 확인하세요.")
+            return
+
+        if isinstance(self.latest_release_info, dict):
+            latest_version = self.latest_release_info.get("latest_version", "")
+            current_version = self.latest_release_info.get("current_version", "")
+            if self.latest_release_info.get("update_available"):
+                self.update_check_status.set(
+                    f"새 버전 v{latest_version} 사용 가능. '지금 확인'으로 릴리즈 페이지를 열 수 있습니다."
+                )
+                return
+            self.update_check_status.set(f"현재 최신 버전(v{current_version})을 사용 중입니다.")
+            return
+
+        if not self.check_updates_on_startup.get():
+            self.update_check_status.set("시작 시 최신 버전 확인이 꺼져 있습니다. '지금 확인'으로 수동 검사할 수 있습니다.")
+            return
+
+        self.update_check_status.set(self.get_default_update_check_status())
+
+    def on_update_check_preference_changed(self, *args):
+        """시작 시 업데이트 확인 옵션 변경을 저장 대상으로 표시하고 안내 문구를 갱신한다."""
+        self.refresh_update_check_status()
+        self.on_setting_changed(*args)
+
     def run_startup_prompts(self):
         """메인 창이 그려진 뒤 초기 안내 대화상자를 순차적으로 표시한다."""
         if self.first_run.get():
@@ -527,6 +576,117 @@ class MessengerDocsApp:
         self.check_credentials_file()
         if self.show_help_on_startup.get():
             self.root.after(400, self.show_help_dialog)
+        if self.check_updates_on_startup.get():
+            self.root.after(900, lambda: self.check_for_updates_async(user_initiated=False))
+
+    def open_release_page(self, release_url=None):
+        """공식 릴리즈 페이지를 기본 브라우저로 연다."""
+        target_url = str(release_url or REPOSITORY_RELEASES_URL).strip() or REPOSITORY_RELEASES_URL
+        try:
+            webbrowser.open(target_url)
+            self.log(f"릴리즈 페이지 열기: {target_url}")
+        except Exception as error:
+            self.log(f"경고: 릴리즈 페이지 열기 실패 - {error}")
+            messagebox.showwarning(
+                "업데이트 안내",
+                f"브라우저에서 릴리즈 페이지를 열지 못했습니다.\n{target_url}\n\n{error}",
+                parent=self.root,
+            )
+
+    def check_for_updates(self):
+        """사용자 요청으로 최신 버전을 확인한다."""
+        self.check_for_updates_async(user_initiated=True)
+
+    def check_for_updates_async(self, user_initiated=False):
+        """GitHub 최신 릴리즈 확인을 백그라운드 스레드에서 실행한다."""
+        if not check_for_new_release:
+            message = "업데이트 확인 기능을 불러오지 못했습니다. 프로그램 파일 구성을 확인하세요."
+            self.update_check_status.set(message)
+            self.log(f"경고: {message}")
+            if user_initiated:
+                messagebox.showerror("업데이트 확인", message, parent=self.root)
+            return
+
+        if self._update_check_in_progress:
+            if user_initiated:
+                messagebox.showinfo("업데이트 확인", "이미 최신 버전을 확인 중입니다.", parent=self.root)
+            return
+
+        self._update_check_in_progress = True
+        self.update_check_status.set("최신 버전 확인 중...")
+        self.log("업데이트 확인 시작: GitHub 최신 릴리즈 조회 중...")
+        threading.Thread(
+            target=self._run_update_check_worker,
+            args=(user_initiated,),
+            daemon=True,
+        ).start()
+
+    def _run_update_check_worker(self, user_initiated):
+        """백그라운드에서 최신 릴리즈를 조회하고 UI 스레드에 결과를 전달한다."""
+        try:
+            release_info = check_for_new_release()
+        except Exception as error:
+            callback = lambda error_message=str(error): self.apply_update_check_error(
+                error_message,
+                user_initiated=user_initiated,
+            )
+        else:
+            callback = lambda release_info=release_info: self.apply_update_check_result(
+                release_info,
+                user_initiated=user_initiated,
+            )
+
+        try:
+            self.root.after(0, callback)
+        except Exception:
+            self._update_check_in_progress = False
+
+    def apply_update_check_result(self, release_info, user_initiated=False):
+        """업데이트 확인 성공 결과를 UI에 반영한다."""
+        self._update_check_in_progress = False
+        self.latest_release_info = dict(release_info) if isinstance(release_info, dict) else None
+        self.refresh_update_check_status()
+
+        if not isinstance(release_info, dict):
+            self.log("경고: 업데이트 확인 결과 형식이 올바르지 않습니다.")
+            if user_initiated:
+                messagebox.showwarning("업데이트 확인", "업데이트 확인 결과를 해석하지 못했습니다.", parent=self.root)
+            return
+
+        current_version = release_info.get("current_version", "?")
+        latest_version = release_info.get("latest_version", "?")
+        release_url = release_info.get("release_url") or REPOSITORY_RELEASES_URL
+
+        if release_info.get("update_available"):
+            self.log(f"새 버전 확인: 현재 v{current_version}, 최신 v{latest_version}")
+            if user_initiated and messagebox.askyesno(
+                "업데이트 확인",
+                f"새 버전 v{latest_version}이 있습니다.\n현재 버전: v{current_version}\n\n릴리즈 페이지를 열까요?",
+                parent=self.root,
+            ):
+                self.open_release_page(release_url)
+            return
+
+        self.log(f"최신 버전 확인 완료: 현재 v{current_version}이 최신입니다.")
+        if user_initiated:
+            messagebox.showinfo(
+                "업데이트 확인",
+                f"현재 최신 버전(v{current_version})을 사용 중입니다.",
+                parent=self.root,
+            )
+
+    def apply_update_check_error(self, error_message, user_initiated=False):
+        """업데이트 확인 실패 결과를 UI에 반영한다."""
+        self._update_check_in_progress = False
+        resolved_message = str(error_message or "알 수 없는 오류").strip()
+        self.update_check_status.set(f"최신 버전 확인 실패: {resolved_message}")
+        self.log(f"경고: 최신 버전 확인 실패 - {resolved_message}")
+        if user_initiated and messagebox.askyesno(
+            "업데이트 확인 실패",
+            f"최신 버전을 확인하지 못했습니다.\n{resolved_message}\n\n공식 릴리즈 페이지를 열까요?",
+            parent=self.root,
+        ):
+            self.open_release_page()
 
 
     def check_credentials_file(self):
@@ -2004,6 +2164,7 @@ class MessengerDocsApp:
         return {
             "first_run": self.first_run.get(),
             "launch_on_windows_startup": self.launch_on_windows_startup.get(),
+            "check_updates_on_startup": self.check_updates_on_startup.get(),
             "watch_folder": self.watch_folder.get(), 
             "docs_input": self.docs_input.get(),
             "show_help_on_startup": self.show_help_on_startup.get(),
@@ -2023,6 +2184,7 @@ class MessengerDocsApp:
         normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
         self.first_run.set(normalized_config.get("first_run", True))
         self.set_launch_on_windows_startup_value(normalized_config.get("launch_on_windows_startup", False), suppress_sync=True)
+        self.check_updates_on_startup.set(normalized_config.get("check_updates_on_startup", True))
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
         self.docs_target_locked.set(False)
@@ -2037,6 +2199,8 @@ class MessengerDocsApp:
         appearance_mode = normalized_config.get("appearance_mode", "System")
         self.appearance_mode.set(appearance_mode)
         ctk.set_appearance_mode(appearance_mode)
+        self.latest_release_info = None
+        self.refresh_update_check_status()
         self.refresh_docs_target_ui()
         return normalized_config
 
@@ -3157,6 +3321,14 @@ class MessengerDocsApp:
         settings_menu.add_command(label="설정 저장", command=self.save_config)
         settings_menu.add_command(label="설정 백업/복원", command=self.show_backup_restore_dialog)
         settings_menu.add_command(label="테마 설정", command=self.show_theme_settings)
+        settings_menu.add_separator()
+        settings_menu.add_checkbutton(
+            label="시작 시 새 버전 확인",
+            variable=self.check_updates_on_startup,
+            onvalue=True,
+            offvalue=False,
+        )
+        settings_menu.add_command(label="새 버전 확인", command=self.check_for_updates)
         settings_menu.add_separator()
         settings_menu.add_command(label="프로그램 종료", command=self.exit_application)
 
