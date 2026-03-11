@@ -28,6 +28,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertEqual(config_data["watch_folder"], "E:/logs")
         self.assertTrue(config_data["use_regex_filter"])
         self.assertTrue(config_data["first_run"])
+        self.assertFalse(config_data["launch_on_windows_startup"])
         self.assertTrue(config_data["show_success_notifications"])
         self.assertEqual(config_data["file_extensions"], ".txt")
         self.assertEqual(config_data["max_cache_size"], 5000)
@@ -48,6 +49,7 @@ class ConfigManagerTests(unittest.TestCase):
                 "docs_input": "docs-id",
                 "appearance_mode": "Dark",
                 "first_run": False,
+                "launch_on_windows_startup": True,
                 "show_success_notifications": False,
                 "max_cache_size": "7500",
             }, config_path=str(config_path))
@@ -62,6 +64,7 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertEqual(used_path, str(config_path))
         self.assertEqual(loaded_config, saved_config)
         self.assertFalse(loaded_config["first_run"])
+        self.assertTrue(loaded_config["launch_on_windows_startup"])
         self.assertFalse(loaded_config["show_success_notifications"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)
 
