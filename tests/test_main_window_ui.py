@@ -73,6 +73,8 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("height=124", self.source)
         self.assertIn("width=480", self.source)
         self.assertIn("문서 ID", self.source)
+        self.assertIn('"watch_folder_browse_button": watch_folder_browse_button', self.source)
+        self.assertIn('"watch_folder_open_button": watch_folder_open_button', self.source)
 
 
 if __name__ == "__main__":

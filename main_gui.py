@@ -730,9 +730,9 @@ class MessengerDocsApp:
     def refresh_docs_target_ui(self):
         """문서 대상 고정 상태에 따라 입력/선택 UI를 갱신한다."""
         docs_input_val = self.docs_input.get().strip()
-        locked = bool(self.docs_target_locked.get() and docs_input_val)
-
-        if self.docs_target_locked.get() != locked:
+        locked = bool(self.docs_target_locked.get())
+        if locked and not docs_input_val:
+            locked = False
             self.docs_target_locked.set(locked)
 
         if locked:
@@ -743,7 +743,7 @@ class MessengerDocsApp:
             lock_button_hover = ("gray78", "gray34")
             lock_button_text_color = ("gray20", "gray92")
         elif docs_input_val:
-            status_text = "문서 입력 중입니다. '문서 경로 확정' 버튼을 눌러 고정하세요."
+            status_text = "문서가 입력되어 있습니다. 감시 시작 시 이 문서를 자동으로 확정합니다."
             status_color = ("#1A73E8", "#8AB4F8")
             lock_button_text = "문서 경로 확정"
             lock_button_color = "#1A73E8"
@@ -868,8 +868,6 @@ class MessengerDocsApp:
             docs_id = extract_google_id_from_url(docs_input_val)
             if not docs_id:
                 errors.append("유효한 Google Docs URL 또는 ID를 입력해주세요.")
-            elif not self.docs_target_locked.get():
-                errors.append("대상 문서를 확정하려면 '문서 경로 확정' 버튼을 눌러주세요.")
 
         try:
             self.parse_max_cache_size()
@@ -1970,7 +1968,7 @@ class MessengerDocsApp:
         self.launch_on_windows_startup.set(normalized_config.get("launch_on_windows_startup", False))
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
-        self.docs_target_locked.set(bool(normalized_config.get("docs_input", "").strip()))
+        self.docs_target_locked.set(False)
         self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
         self.show_success_notifications.set(normalized_config.get("show_success_notifications", True))
         self.play_event_sounds.set(normalized_config.get("play_event_sounds", True))
@@ -2041,6 +2039,11 @@ class MessengerDocsApp:
         google_services = self.verify_google_services_before_monitoring()
         if not google_services:
             return
+
+        if not self.docs_target_locked.get():
+            self.docs_target_locked.set(True)
+            self.refresh_docs_target_ui()
+            self.log("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
         
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
@@ -2095,28 +2098,37 @@ class MessengerDocsApp:
             self.log("현재 감시 중 아님.")
             self.on_monitoring_stopped()
     def on_monitoring_stopped(self):
-         self.is_monitoring = False
-         self.monitoring_thread = None
-         if hasattr(self, 'root') and self.root.winfo_exists():
-             try: 
-                 self.start_button.configure(state="normal")
-                 self.stop_button.configure(state="disabled")
-                 self.enable_settings_widgets()
-                 self.update_status("준비")
-                 self.log("감시 중지됨.")
-             except Exception: pass # 위젯 파괴 후 예외 무시
+        self.is_monitoring = False
+        self.monitoring_thread = None
+        was_docs_locked = self.docs_target_locked.get() if hasattr(self, "docs_target_locked") else False
+        if was_docs_locked:
+            self.docs_target_locked.set(False)
+        if hasattr(self, 'root') and self.root.winfo_exists():
+            try:
+                self.start_button.configure(state="normal")
+                self.stop_button.configure(state="disabled")
+                self.enable_settings_widgets()
+                if was_docs_locked:
+                    self.log("감시 중지로 대상 문서 고정이 해제되었습니다.")
+                self.update_status("준비")
+                self.log("감시 중지됨.")
+            except Exception:
+                pass  # 위젯 파괴 후 예외 무시
     def disable_settings_widgets(self):
         # ⚠️ 수정: winfo_children()[0] 인덱스 접근 → self.settings_frame 직접 참조로 안전하게 변경
         try:
             if not hasattr(self, 'settings_frame') or not self.settings_frame.winfo_exists():
                 return
+            always_enabled_widgets = {
+                getattr(self, "watch_folder_open_button", None),
+            }
             for child in self.settings_frame.winfo_children():
                 if isinstance(child, ctk.CTkFrame):
                     for widget in child.winfo_children():
-                        # 웹에서 문서를 바로 열어보는 버튼은 감시 중에도 유지
-                        if isinstance(widget, ctk.CTkButton) and widget.cget("text") == "Docs 웹에서 열기":
+                        if widget in always_enabled_widgets:
+                            widget.configure(state="normal")
                             continue
-                        elif isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
+                        if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
                             widget.configure(state="disabled")
         except AttributeError:
             pass  # 위젯 파괴 후 예외 무시
@@ -2134,6 +2146,7 @@ class MessengerDocsApp:
                         if isinstance(widget, (ctk.CTkEntry, ctk.CTkButton)):
                             widget.configure(state="normal")
             self.refresh_docs_target_ui()
+            self.update_windows_startup_ui_state()
         except AttributeError:
             pass
 
