@@ -22,46 +22,182 @@ def _center_dialog_window(window, center_window_func=None):
     window.geometry(f"{width}x{height}+{x}+{y}")
 
 
+# ---------------------------------------------------------------------------
+#  도움말 (시작 가이드) 대화상자
+# ---------------------------------------------------------------------------
+
+def _get_help_sections():
+    """도움말 대화상자에 표시할 섹션 목록을 반환한다.
+
+    각 섹션은 (아이콘, 제목, 본문_리스트) 튜플이다.
+    본문_리스트의 각 항목은 한 줄로 표시된다.
+    """
+    return [
+        (
+            "\U0001F4CB",  # 📋
+            "이 프로그램이 하는 일",
+            [
+                "지정한 폴더에서 텍스트 파일(.txt)의 변경을 감지하고,",
+                "새 내용을 Google Docs 문서에 자동으로 이어 기록합니다.",
+            ],
+        ),
+        (
+            "\U0001F527",  # 🔧
+            "시작 전 준비 \u2014 3단계",
+            [
+                "\u2460 감시 폴더  \u279C  '폴더 선택' 버튼으로 txt 파일이 저장될 폴더 지정",
+                "\u2461 문서 연결  \u279C  Google Docs URL/ID 입력, 또는 '새 문서 만들기'",
+                "\u2462 설정 저장  \u279C  '설정 저장' 클릭 (다음 실행 시에도 유지)",
+            ],
+        ),
+        (
+            "\U0001F680",  # 🚀
+            "사용 흐름",
+            [
+                "'감시 시작' 클릭 \u2192 폴더 내 파일 변경 자동 감지",
+                "새 내용은 타임스탬프와 함께 Docs 끝에 추가",
+                "'감시 중지' 클릭으로 언제든 중단 가능",
+            ],
+        ),
+        (
+            "\U0001F514",  # 🔔
+            "트레이 아이콘",
+            [
+                "창을 닫아도 트레이에서 계속 실행됩니다.",
+                "트레이 아이콘 우클릭 \u2192 창 열기 / 종료",
+            ],
+        ),
+        (
+            "\u2753",  # ❓
+            "문제가 생겼을 때",
+            [
+                "인증 오류 \u2192 인증 파일(developer_credentials.json) 확인",
+                "연결 오류 \u2192 인터넷 연결 상태 확인",
+                "권한 오류 \u2192 Google 계정의 문서 편집 권한 확인",
+                "하단 로그 창 또는 '로그 폴더 열기'에서 상세 내역 확인",
+            ],
+        ),
+    ]
+
+
 def build_help_guide_text():
-    """도움말 대화상자 본문 텍스트를 반환한다."""
-    return """
-📋 프로그램 개요
-이 프로그램은 특정 폴더에 저장되는 텍스트 파일(.txt)의 내용을 자동으로 감지하여 Google Docs 문서에 기록해주는 도구입니다.
+    """도움말 대화상자 본문 텍스트를 반환한다 (하위 호환용 폴백)."""
+    lines = []
+    for icon, title, body in _get_help_sections():
+        lines.append(f"{icon} {title}")
+        for item in body:
+            lines.append(f"  {item}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
-🔧 기본 설정 방법
-1. 감시 폴더: '폴더 선택...' 버튼을 클릭하여 텍스트 파일이 저장될 폴더를 지정합니다.
-   - 이 폴더에 새로운 .txt 파일이 생성되거나 기존 파일이 수정될 때 내용을 감지합니다.
 
-2. Google Docs URL/ID: 내용을 기록할 Google Docs 문서의 URL이나 ID를 입력합니다.
-   - 전체 URL(https://docs.google.com/document/d/문서ID/edit)을 붙여넣거나
-   - 문서 ID만 직접 입력할 수 있습니다.
-   - '새 문서 만들기' 버튼으로 현재 권한 범위에서 새 문서를 만들고 바로 연결할 수 있습니다.
-   - '기존 문서 주소 입력' 버튼을 누르면 기존 문서 주소/ID 입력칸에 바로 입력할 수 있습니다.
-   - '문서 목록' 버튼으로 이 앱이 접근 가능한 문서 목록에서 선택할 수 있습니다.
-   - 'Docs 웹에서 열기' 버튼을 클릭하면 현재 설정된 문서를 웹 브라우저에서 확인할 수 있습니다.
+def _build_help_section_card(parent_frame, icon, title, body_lines, ctk, ui_font_family=None):
+    """도움말 섹션 하나를 카드 형태 프레임으로 생성한다."""
+    card = ctk.CTkFrame(parent_frame, corner_radius=10)
+    card.pack(fill="x", padx=4, pady=(0, 10))
 
-3. 설정 저장: 설정을 완료한 후 '설정 저장' 버튼을 클릭하면 다음 실행 시에도 같은 설정이 유지됩니다.
+    # 헤더: 아이콘 + 제목
+    header = ctk.CTkFrame(card, fg_color="transparent")
+    header.pack(fill="x", padx=14, pady=(12, 4))
 
-🚀 사용 방법
-1. '감시 시작' 버튼을 클릭하면 지정된 폴더의 감시가 시작됩니다.
-2. 감시 중에는 폴더 내 .txt 파일의 변경이 자동으로 감지됩니다.
-3. 감지된 새 내용은 Google Docs 문서의 끝에 타임스탬프와 함께 이어서 추가됩니다.
-4. '감시 중지' 버튼을 클릭하면 감시가 중단됩니다.
+    ctk.CTkLabel(
+        header,
+        text=icon,
+        font=ctk.CTkFont(family=ui_font_family, size=22),
+        width=28,
+    ).pack(side="left", padx=(0, 6))
 
-🔔 트레이 아이콘 기능
-- 창을 닫아도 프로그램은 트레이 아이콘으로 계속 실행됩니다.
-- 트레이 아이콘을 우클릭하여 창 보이기/숨기기 또는 프로그램 종료가 가능합니다.
+    ctk.CTkLabel(
+        header,
+        text=title,
+        font=ctk.CTkFont(family=ui_font_family, size=15, weight="bold"),
+        anchor="w",
+    ).pack(side="left", fill="x", expand=True)
 
-📝 로그 확인
-- 프로그램 하단의 로그 창에서 실시간 작업 내역을 확인할 수 있습니다.
-- '로그 폴더 열기' 버튼을 클릭하면 상세 로그 파일이 저장된 폴더를 열 수 있습니다.
+    # 본문
+    body_frame = ctk.CTkFrame(card, fg_color="transparent")
+    body_frame.pack(fill="x", padx=20, pady=(0, 12))
 
-❓ 문제 해결
-- Google 인증 오류: 인증 파일이 올바르게 설치되었는지 확인하세요.
-- 연결 오류: 인터넷 연결 상태를 확인하세요.
-- 권한 오류: Google 계정에 문서 편집 권한이 있는지 확인하세요.
-    """.strip()
+    for line in body_lines:
+        ctk.CTkLabel(
+            body_frame,
+            text=line,
+            font=ctk.CTkFont(family=ui_font_family, size=13),
+            anchor="w",
+            justify="left",
+            wraplength=580,
+        ).pack(fill="x", anchor="w", pady=1)
 
+
+def show_help_dialog(parent, show_help_on_startup, ui_font_family=None, on_window_close=None, ctk_module=None, center_window_func=None):
+    """도움말 대화상자를 생성해 표시한다."""
+    ctk = _resolve_ctk(ctk_module)
+
+    help_window = ctk.CTkToplevel(parent)
+    help_window.title("시작 가이드")
+    help_window.geometry("680x560")
+    help_window.minsize(580, 480)
+    help_window.transient(parent)
+    help_window.grab_set()
+
+    # -- 외곽 컨테이너 --
+    outer = ctk.CTkFrame(help_window, fg_color="transparent")
+    outer.pack(fill="both", expand=True, padx=16, pady=16)
+
+    # 제목
+    ctk.CTkLabel(
+        outer,
+        text="메신저 Docs 자동 기록",
+        font=ctk.CTkFont(family=ui_font_family, size=22, weight="bold"),
+    ).pack(pady=(0, 2))
+
+    ctk.CTkLabel(
+        outer,
+        text="빠른 시작 가이드",
+        font=ctk.CTkFont(family=ui_font_family, size=14),
+        text_color="gray",
+    ).pack(pady=(0, 12))
+
+    # -- 스크롤 영역: 섹션 카드들 --
+    scroll_area = ctk.CTkScrollableFrame(outer, corner_radius=8)
+    scroll_area.pack(fill="both", expand=True)
+
+    for icon, title, body_lines in _get_help_sections():
+        _build_help_section_card(scroll_area, icon, title, body_lines, ctk, ui_font_family=ui_font_family)
+
+    # -- 하단 바: 체크박스 + 닫기 --
+    bottom_bar = ctk.CTkFrame(outer, fg_color="transparent")
+    bottom_bar.pack(fill="x", pady=(12, 0))
+
+    ctk.CTkCheckBox(
+        bottom_bar,
+        text="시작할 때 이 가이드 표시",
+        variable=show_help_on_startup,
+        onvalue=True,
+        offvalue=False,
+        font=ctk.CTkFont(family=ui_font_family, size=13),
+    ).pack(side="left")
+
+    ctk.CTkButton(
+        bottom_bar,
+        text="닫기",
+        command=help_window.destroy,
+        width=90,
+    ).pack(side="right")
+
+    def handle_window_close():
+        if on_window_close:
+            on_window_close()
+        help_window.destroy()
+
+    help_window.protocol("WM_DELETE_WINDOW", handle_window_close)
+    _center_dialog_window(help_window, center_window_func=center_window_func)
+    return help_window
+
+
+# ---------------------------------------------------------------------------
+#  오류 대화상자
+# ---------------------------------------------------------------------------
 
 def get_error_solution_text(error_type):
     """오류 유형별 해결 방법 텍스트를 반환한다."""
@@ -110,62 +246,6 @@ def get_credentials_wizard_guide_text():
         "3) 복사 후 '테스트' 결과가 성공이면 창을 닫고\n"
         "   프로그램을 다시 실행하거나 감시를 시작하세요."
     )
-
-
-def show_help_dialog(parent, show_help_on_startup, on_window_close=None, ctk_module=None, center_window_func=None):
-    """도움말 대화상자를 생성해 표시한다."""
-    ctk = _resolve_ctk(ctk_module)
-
-    help_window = ctk.CTkToplevel(parent)
-    help_window.title("메신저 Docs 자동 기록 - 시작 가이드")
-    help_window.geometry("750x650")
-    help_window.minsize(750, 650)
-    help_window.transient(parent)
-    help_window.grab_set()
-
-    main_frame = ctk.CTkFrame(help_window)
-    main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-    title_label = ctk.CTkLabel(
-        main_frame,
-        text="메신저 Docs 자동 기록 사용 가이드",
-        font=ctk.CTkFont(size=18, weight="bold"),
-    )
-    title_label.pack(pady=(0, 15))
-
-    help_text = ctk.CTkTextbox(main_frame, wrap="word", height=350)
-    help_text.pack(fill="both", expand=True, padx=10, pady=10)
-    help_text.insert("1.0", build_help_guide_text())
-    help_text.configure(state="disabled")
-
-    checkbox_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-    checkbox_frame.pack(fill="x", pady=(10, 0))
-
-    show_on_startup_checkbox = ctk.CTkCheckBox(
-        checkbox_frame,
-        text="프로그램 시작 시 이 도움말 표시",
-        variable=show_help_on_startup,
-        onvalue=True,
-        offvalue=False,
-    )
-    show_on_startup_checkbox.pack(side="left", padx=10)
-
-    close_button = ctk.CTkButton(
-        main_frame,
-        text="닫기",
-        command=help_window.destroy,
-        width=100,
-    )
-    close_button.pack(pady=(10, 0))
-
-    def handle_window_close():
-        if on_window_close:
-            on_window_close()
-        help_window.destroy()
-
-    help_window.protocol("WM_DELETE_WINDOW", handle_window_close)
-    _center_dialog_window(help_window, center_window_func=center_window_func)
-    return help_window
 
 
 def show_enhanced_error_dialog(
@@ -254,6 +334,10 @@ def show_enhanced_error_dialog(
     _center_dialog_window(error_window, center_window_func=center_window_func)
     return error_window
 
+
+# ---------------------------------------------------------------------------
+#  테마 설정 대화상자
+# ---------------------------------------------------------------------------
 
 def show_theme_settings_dialog(
     parent,
@@ -354,6 +438,10 @@ def show_theme_settings_dialog(
     _center_dialog_window(theme_window, center_window_func=center_window_func)
     return theme_window
 
+
+# ---------------------------------------------------------------------------
+#  Google 인증 설정 마법사 대화상자
+# ---------------------------------------------------------------------------
 
 def show_credentials_wizard_dialog(
     parent,

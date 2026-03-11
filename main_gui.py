@@ -2384,6 +2384,7 @@ class MessengerDocsApp:
         show_help_dialog_window(
             self.root,
             show_help_on_startup=self.show_help_on_startup,
+            ui_font_family=self.ui_font_family,
             on_window_close=on_help_close,
             ctk_module=ctk,
             center_window_func=center_window,
