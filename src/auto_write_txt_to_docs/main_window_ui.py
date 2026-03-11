@@ -19,6 +19,61 @@ def _font(ctk, size, weight="normal", family=None):
     return ctk.CTkFont(**font_kwargs)
 
 
+def _attach_tooltip(widget, text, delay_ms=450, wraplength=280):
+    """위젯에 마우스 오버 툴팁을 연결한다."""
+    import tkinter as tk
+
+    tooltip_window = None
+    scheduled_job = None
+
+    def hide_tooltip(_event=None):
+        nonlocal tooltip_window, scheduled_job
+        if scheduled_job is not None:
+            widget.after_cancel(scheduled_job)
+            scheduled_job = None
+        if tooltip_window is not None and tooltip_window.winfo_exists():
+            tooltip_window.destroy()
+        tooltip_window = None
+
+    def show_tooltip():
+        nonlocal tooltip_window, scheduled_job
+        scheduled_job = None
+        if tooltip_window is not None or not widget.winfo_exists():
+            return
+
+        tooltip_window = tk.Toplevel(widget)
+        tooltip_window.wm_overrideredirect(True)
+        tooltip_window.attributes("-topmost", True)
+
+        x_pos = widget.winfo_rootx() + widget.winfo_width() + 10
+        y_pos = widget.winfo_rooty() + max(6, widget.winfo_height() // 2)
+        tooltip_window.wm_geometry(f"+{x_pos}+{y_pos}")
+
+        tooltip_label = tk.Label(
+            tooltip_window,
+            text=text,
+            justify="left",
+            background="#111827",
+            foreground="#F9FAFB",
+            relief="solid",
+            borderwidth=1,
+            padx=10,
+            pady=6,
+            wraplength=wraplength,
+        )
+        tooltip_label.pack()
+
+    def schedule_tooltip(_event=None):
+        nonlocal scheduled_job
+        hide_tooltip()
+        scheduled_job = widget.after(delay_ms, show_tooltip)
+
+    widget.bind("<Enter>", schedule_tooltip, add="+")
+    widget.bind("<Leave>", hide_tooltip, add="+")
+    widget.bind("<ButtonPress>", hide_tooltip, add="+")
+    widget.bind("<Destroy>", hide_tooltip, add="+")
+
+
 def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
     """상단 상태 패널을 생성한다."""
     status_card = ctk.CTkFrame(parent, corner_radius=14)
@@ -254,12 +309,29 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         validatecommand=validate_command,
     )
     max_cache_size_entry.pack(side="left", padx=4)
+    cache_folder_button = ctk.CTkButton(
+        max_cache_row,
+        text="캐시 폴더 열기",
+        width=112,
+        height=32,
+        corner_radius=10,
+        command=callbacks["open_cache_folder"],
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    cache_folder_button.pack(side="right")
+    _attach_tooltip(
+        cache_folder_button,
+        "전역 라인 캐시와 처리 상태 파일이 저장된 폴더를 Windows 탐색기에서 엽니다.",
+    )
     ctk.CTkLabel(
         max_cache_row,
         text="중복 비교용 전역 라인 캐시에 유지할 최대 항목 수",
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray72"),
-    ).pack(side="left", padx=(8, 0))
+    ).pack(side="left", padx=(8, 12))
     notification_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     notification_row.pack(fill="x", padx=14, pady=4)
     ctk.CTkLabel(
@@ -433,6 +505,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         "watch_folder_open_button": watch_folder_open_button,
         "watch_folder_drop_hint_label": watch_folder_drop_hint_label,
         "max_cache_size_entry": max_cache_size_entry,
+        "cache_folder_button": cache_folder_button,
         "notification_checkbox": notification_checkbox,
         "autostart_checkbox": autostart_checkbox,
         "autostart_hint_label": autostart_hint_label,

@@ -13,6 +13,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("_build_control_panel", self.source)
         self.assertIn("_build_result_panel", self.source)
         self.assertIn("_build_log_panel", self.source)
+        self.assertIn("def _attach_tooltip", self.source)
 
     def test_main_window_ui_keeps_font_helper_and_workspace_copy(self):
         self.assertIn("def _font", self.source)
@@ -38,6 +39,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("작업 설정", self.source)
         self.assertIn("watch_folder_drop_hint", self.source)
         self.assertIn("라인 캐시 크기", self.source)
+        self.assertIn("캐시 폴더 열기", self.source)
         self.assertIn("작업 결과 알림", self.source)
         self.assertIn("작업 결과 효과음", self.source)
         self.assertIn("Windows 자동 실행", self.source)
@@ -61,6 +63,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn('text="감시 중지"', self.source)
         self.assertIn('text="Docs 웹에서 열기"', self.source)
         self.assertIn('text="폴더 열기"', self.source)
+        self.assertIn('text="캐시 폴더 열기"', self.source)
         self.assertIn('text="검색"', self.source)
         self.assertIn('text="지우기"', self.source)
         self.assertIn("watch_folder_entry", self.source)
@@ -75,6 +78,9 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("문서 ID", self.source)
         self.assertIn('"watch_folder_browse_button": watch_folder_browse_button', self.source)
         self.assertIn('"watch_folder_open_button": watch_folder_open_button', self.source)
+        self.assertIn('"cache_folder_button": cache_folder_button', self.source)
+        self.assertIn('_attach_tooltip(', self.source)
+        self.assertIn("전역 라인 캐시와 처리 상태 파일이 저장된 폴더를 Windows 탐색기에서 엽니다.", self.source)
 
 
 if __name__ == "__main__":

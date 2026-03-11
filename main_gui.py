@@ -58,6 +58,7 @@ except ImportError:
 try:
     from src.auto_write_txt_to_docs.path_utils import (
         BUNDLED_CREDENTIALS_FILE_STR,
+        CACHE_FILE_STR,
         CONFIG_FILE_STR,
         USER_CREDENTIALS_FILE_STR,
         LEGACY_CONFIG_FILE_STR,
@@ -67,6 +68,7 @@ try:
 except ImportError:
     logging.error("경로 유틸리티 모듈(path_utils.py)을 찾을 수 없습니다.")
     BUNDLED_CREDENTIALS_FILE_STR = None
+    CACHE_FILE_STR = "added_lines_cache.json"
     CONFIG_FILE_STR = "config.json"
     USER_CREDENTIALS_FILE_STR = "developer_credentials.json"
     LEGACY_CONFIG_FILE_STR = "config.json"
@@ -1245,6 +1247,7 @@ class MessengerDocsApp:
                 "optimize_memory": self.optimize_memory,
                 "browse_folder": self.browse_folder,
                 "open_watch_folder": lambda: self.open_folder_in_explorer(self.watch_folder.get()),
+                "open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR)),
                 "show_filter_settings": self.show_filter_settings,
                 "create_new_google_doc": self.create_new_google_doc,
                 "focus_existing_docs_input": self.focus_existing_docs_input,
@@ -2121,6 +2124,7 @@ class MessengerDocsApp:
                 return
             always_enabled_widgets = {
                 getattr(self, "watch_folder_open_button", None),
+                getattr(self, "cache_folder_button", None),
             }
             for child in self.settings_frame.winfo_children():
                 if isinstance(child, ctk.CTkFrame):
