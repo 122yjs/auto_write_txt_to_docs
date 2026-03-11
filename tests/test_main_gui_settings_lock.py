@@ -104,6 +104,7 @@ class MainGuiTestBase(unittest.TestCase):
         app.watch_folder_entry = FakeEntry()
         app.watch_folder_browse_button = FakeButton("폴더 선택")
         app.watch_folder_open_button = FakeButton("열기")
+        app.cache_folder_button = FakeButton("캐시 폴더 열기")
 
         app.create_doc_button = FakeButton("새 문서 만들기")
         app.manual_doc_input_button = FakeButton("기존 문서 주소 입력")
@@ -121,6 +122,8 @@ class MainGuiTestBase(unittest.TestCase):
             app.watch_folder_browse_button,
             app.watch_folder_open_button,
         ]
+        cache_row = FakeFrame()
+        cache_row.children = [app.cache_folder_button]
         docs_action_row = FakeFrame()
         docs_action_row.children = [
             app.create_doc_button,
@@ -131,7 +134,7 @@ class MainGuiTestBase(unittest.TestCase):
         docs_input_row.children = [app.docs_input_entry]
         docs_lock_row = FakeFrame()
         docs_lock_row.children = [app.docs_target_status_label, app.docs_lock_button, other_button]
-        app.settings_frame.children = [folder_row, docs_action_row, docs_input_row, docs_lock_row]
+        app.settings_frame.children = [folder_row, cache_row, docs_action_row, docs_input_row, docs_lock_row]
         app.other_button = other_button
         return app
 
@@ -146,6 +149,7 @@ class MainGuiSettingsLockTests(MainGuiTestBase):
         self.assertEqual(app.watch_folder_entry.state, "disabled")
         self.assertEqual(app.watch_folder_browse_button.state, "disabled")
         self.assertEqual(app.watch_folder_open_button.state, "normal")
+        self.assertEqual(app.cache_folder_button.state, "normal")
         self.assertEqual(app.create_doc_button.state, "disabled")
         self.assertEqual(app.docs_input_entry.state, "disabled")
         self.assertEqual(app.other_button.state, "disabled")
@@ -160,6 +164,7 @@ class MainGuiSettingsLockTests(MainGuiTestBase):
         self.assertEqual(app.watch_folder_entry.state, "normal")
         self.assertEqual(app.watch_folder_browse_button.state, "normal")
         self.assertEqual(app.watch_folder_open_button.state, "normal")
+        self.assertEqual(app.cache_folder_button.state, "normal")
         self.assertEqual(app.create_doc_button.state, "normal")
         self.assertEqual(app.docs_input_entry.state, "normal")
         self.assertEqual(app.other_button.state, "normal")

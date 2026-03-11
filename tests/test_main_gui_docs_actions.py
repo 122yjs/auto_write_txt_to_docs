@@ -56,6 +56,7 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("clear_extraction_preview", self.main_gui_source)
         self.assertIn("max_cache_size", self.main_gui_source)
         self.assertIn("parse_max_cache_size", self.main_gui_source)
+        self.assertIn("CACHE_FILE_STR", self.main_gui_source)
         self.assertIn("first_run", self.main_gui_source)
         self.assertIn("launch_on_windows_startup", self.main_gui_source)
         self.assertIn("autostart_hint", self.main_gui_source)
@@ -92,7 +93,9 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn('text="문서 목록"', self.main_window_ui_source)
         self.assertIn('text="문서 경로 확정"', self.main_window_ui_source)
         self.assertIn('text="라인 캐시 크기"', self.main_window_ui_source)
+        self.assertIn('text="캐시 폴더 열기"', self.main_window_ui_source)
         self.assertIn('text="로그 팝업"', self.main_window_ui_source)
+        self.assertIn('"open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR))', self.main_gui_source)
 
 
 if __name__ == "__main__":
