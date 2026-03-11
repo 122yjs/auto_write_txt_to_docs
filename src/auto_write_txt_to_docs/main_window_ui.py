@@ -138,6 +138,10 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
         text_color=("gray20", "gray92"),
     )
     memory_optimize_button.pack(side="left", padx=(10, 0))
+    _attach_tooltip(
+        memory_optimize_button,
+        "현재 앱 메모리 사용량을 점검하고 가능한 정리 작업을 실행합니다.",
+    )
 
     right_metrics = ctk.CTkFrame(metrics_frame, fg_color="transparent")
     right_metrics.pack(side="right")
@@ -280,7 +284,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray72"),
     ).pack(side="left", padx=(8, 0))
-    ctk.CTkButton(
+    advanced_filter_button = ctk.CTkButton(
         filter_row,
         text="고급 필터",
         width=86,
@@ -288,7 +292,12 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         corner_radius=10,
         command=callbacks["show_filter_settings"],
         font=_font(ctk, 12, "bold", family=font_family),
-    ).pack(side="right")
+    )
+    advanced_filter_button.pack(side="right")
+    _attach_tooltip(
+        advanced_filter_button,
+        "확장자 외에 정규식과 세부 필터 조건을 추가로 설정합니다.",
+    )
 
     max_cache_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     max_cache_row.pack(fill="x", padx=14, pady=4)
@@ -453,6 +462,10 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         font=_font(ctk, 12, "bold", family=font_family),
     )
     select_doc_button.pack(side="left", padx=(8, 0))
+    _attach_tooltip(
+        select_doc_button,
+        "현재 계정에서 접근 가능한 Google Docs 목록을 불러와 작업 문서를 선택합니다.",
+    )
 
     docs_input_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     docs_input_row.pack(fill="x", padx=14, pady=(4, 6))
@@ -497,6 +510,10 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         hover_color="#1765CC",
     )
     docs_lock_button.pack(side="right", padx=(10, 0))
+    _attach_tooltip(
+        docs_lock_button,
+        "현재 입력된 문서를 작업 대상으로 고정해 감시 시작 전에 다시 바뀌지 않게 합니다.",
+    )
 
     return {
         "settings_frame": settings_frame,
@@ -579,6 +596,10 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         text_color=("gray20", "gray92"),
     )
     log_popup_button.pack(side="left", padx=(10, 0))
+    _attach_tooltip(
+        log_popup_button,
+        "작업 로그를 별도 창으로 열어 좁은 화면에서도 편하게 확인합니다.",
+    )
 
     button_spacer = ctk.CTkFrame(
         row,
@@ -601,7 +622,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         text_color=("gray20", "gray92"),
     ).pack(side="right")
 
-    ctk.CTkButton(
+    backup_restore_button = ctk.CTkButton(
         row,
         text="백업/복원",
         command=callbacks["show_backup_restore_dialog"],
@@ -612,7 +633,12 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         fg_color=("gray85", "gray28"),
         hover_color=("gray78", "gray34"),
         text_color=("gray20", "gray92"),
-    ).pack(side="right", padx=(0, 10))
+    )
+    backup_restore_button.pack(side="right", padx=(0, 10))
+    _attach_tooltip(
+        backup_restore_button,
+        "현재 설정을 백업 파일로 저장하거나 이전 백업 설정을 불러옵니다.",
+    )
 
     ctk.CTkButton(
         row,
@@ -709,6 +735,10 @@ def _build_log_panel(ctk, parent, callbacks, font_family):
         text_color=("gray20", "gray92"),
     )
     log_clear_button.pack(side="right", padx=(0, 8))
+    _attach_tooltip(
+        log_clear_button,
+        "화면에 표시된 로그만 지우며 저장된 로그 파일은 삭제하지 않습니다.",
+    )
 
     log_text = ctk.CTkTextbox(
         log_card,
@@ -764,6 +794,10 @@ def _build_result_panel(ctk, parent, callbacks, font_family):
         text_color=("gray20", "gray92"),
     )
     result_clear_button.pack(side="right")
+    _attach_tooltip(
+        result_clear_button,
+        "현재 표시 중인 최근 추출 결과만 지우며 원본 기록과 문서 내용은 유지합니다.",
+    )
 
     result_preview_text = ctk.CTkTextbox(
         result_card,
