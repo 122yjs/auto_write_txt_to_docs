@@ -413,7 +413,7 @@ class MessengerDocsApp:
         self.launch_on_windows_startup = tk.BooleanVar(value=False)
         self.watch_folder = ctk.StringVar()
         self.watch_folder_drop_hint = ctk.StringVar(value="폴더를 여기로 끌어다 놓거나 '폴더 선택' 버튼을 사용하세요.")
-        self.autostart_hint = ctk.StringVar(value="Windows 로그인 시 자동 실행 여부를 저장합니다.")
+        self.autostart_hint = ctk.StringVar(value="Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
@@ -451,8 +451,9 @@ class MessengerDocsApp:
         self.result_popup_presenter = ResultPopupPresenter(self.root) if ResultPopupPresenter else None
         
         # 설정 변수 변경 감지를 위한 추적
+        self._suppress_autostart_trace = False
         self.first_run.trace_add("write", self.on_setting_changed)
-        self.launch_on_windows_startup.trace_add("write", self.on_setting_changed)
+        self.launch_on_windows_startup.trace_add("write", self.on_windows_startup_setting_changed)
         self.watch_folder.trace_add("write", self.on_setting_changed)
         self.docs_input.trace_add("write", self.on_setting_changed)
         self.show_help_on_startup.trace_add("write", self.on_setting_changed)
@@ -728,6 +729,77 @@ class MessengerDocsApp:
             self.docs_info_var.set("문서: 설정되지 않음")
 
         self.refresh_docs_target_ui()
+
+    def set_launch_on_windows_startup_value(self, enabled, suppress_sync=True):
+        """자동 실행 변수 값을 설정하고 필요 시 즉시 동기화를 억제한다."""
+        previous_suppress_state = getattr(self, "_suppress_autostart_trace", False)
+        if suppress_sync:
+            self._suppress_autostart_trace = True
+
+        try:
+            self.launch_on_windows_startup.set(bool(enabled))
+        finally:
+            if suppress_sync:
+                self._suppress_autostart_trace = previous_suppress_state
+
+    def can_manage_windows_startup(self):
+        """현재 환경에서 Windows 자동 실행 상태를 읽고 쓸 수 있는지 반환한다."""
+        return bool(
+            supports_windows_startup
+            and supports_windows_startup()
+            and is_windows_startup_enabled
+            and set_windows_startup_enabled
+        )
+
+    def persist_windows_startup_preference(self):
+        """자동 실행 설정만 현재 설정 파일에 즉시 저장한다."""
+        if not save_app_config:
+            raise RuntimeError("설정 저장 모듈을 불러오지 못했습니다.")
+
+        stored_config = {}
+        if load_app_config:
+            stored_config, _, _, _ = load_app_config(
+                config_path=CONFIG_FILE_STR,
+                legacy_config_path=LEGACY_CONFIG_FILE_STR,
+            )
+
+        persisted_config = dict(stored_config) if isinstance(stored_config, dict) else {}
+        persisted_config["launch_on_windows_startup"] = self.launch_on_windows_startup.get()
+        persisted_config["first_run"] = self.first_run.get()
+        save_app_config(persisted_config, config_path=CONFIG_FILE_STR)
+
+    def on_windows_startup_setting_changed(self, *args):
+        """자동 실행 스위치 변경을 즉시 Windows 시작프로그램 상태에 반영한다."""
+        if getattr(self, "_suppress_autostart_trace", False):
+            return
+
+        if not self.can_manage_windows_startup():
+            return
+
+        previous_state = is_windows_startup_enabled()
+        desired_state = self.launch_on_windows_startup.get()
+        if desired_state == previous_state:
+            return
+
+        try:
+            self.sync_windows_startup_setting()
+            self.persist_windows_startup_preference()
+            self.update_windows_startup_ui_state()
+        except Exception as autostart_error:
+            try:
+                if is_windows_startup_enabled() != previous_state:
+                    set_windows_startup_enabled(previous_state)
+            except Exception as rollback_error:
+                self.log(f"경고: Windows 자동 실행 설정 롤백 실패 - {rollback_error}")
+
+            self.set_launch_on_windows_startup_value(previous_state, suppress_sync=True)
+            self.update_windows_startup_ui_state()
+            self.log(f"경고: Windows 자동 실행 설정 적용 실패 - {autostart_error}")
+            messagebox.showwarning(
+                "Windows 자동 실행",
+                f"Windows 자동 실행 상태를 변경하지 못했습니다.\n{autostart_error}",
+                parent=self.root,
+            )
 
     def refresh_docs_target_ui(self):
         """문서 대상 고정 상태에 따라 입력/선택 UI를 갱신한다."""
@@ -1281,58 +1353,49 @@ class MessengerDocsApp:
 
     def update_windows_startup_ui_state(self):
         """현재 플랫폼에 맞게 Windows 자동 실행 UI를 조정한다."""
-        autostart_supported = bool(
-            supports_windows_startup
-            and supports_windows_startup()
-            and is_windows_startup_enabled
-            and set_windows_startup_enabled
-        )
+        autostart_supported = self.can_manage_windows_startup()
 
         if autostart_supported:
-            self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 설정 저장 시 시작프로그램 폴더를 갱신합니다.")
-            if hasattr(self, "autostart_checkbox"):
-                self.autostart_checkbox.configure(state="normal")
+            self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
+            if hasattr(self, "autostart_switch"):
+                self.autostart_switch.configure(state="normal")
             return
 
         self.autostart_hint.set("현재 OS에서는 Windows 자동 실행을 지원하지 않습니다.")
-        if hasattr(self, "autostart_checkbox"):
-            self.autostart_checkbox.configure(state="disabled")
+        if hasattr(self, "autostart_switch"):
+            self.autostart_switch.configure(state="disabled")
 
     def refresh_windows_startup_setting_from_system(self):
         """Windows 실제 자동 실행 상태를 UI 설정값에 반영한다."""
-        autostart_supported = bool(
+        if not (
             supports_windows_startup
             and supports_windows_startup()
             and is_windows_startup_enabled
-        )
-        if not autostart_supported:
+        ):
             return
 
         try:
-            self.launch_on_windows_startup.set(is_windows_startup_enabled())
+            self.set_launch_on_windows_startup_value(is_windows_startup_enabled(), suppress_sync=True)
         except Exception as error:
             self.log(f"경고: Windows 자동 실행 상태 확인 실패 - {error}")
 
     def sync_windows_startup_setting(self):
         """저장된 UI 설정을 Windows 시작프로그램 폴더와 동기화한다."""
-        autostart_supported = bool(
-            supports_windows_startup
-            and supports_windows_startup()
-            and is_windows_startup_enabled
-            and set_windows_startup_enabled
-        )
-        if not autostart_supported:
+        if not self.can_manage_windows_startup():
             return
 
         desired_state = self.launch_on_windows_startup.get()
+        current_state = is_windows_startup_enabled()
+        if desired_state == current_state:
+            return
+
         if desired_state:
             set_windows_startup_enabled(True)
             self.log("Windows 자동 실행 등록 완료.")
             return
 
-        if is_windows_startup_enabled():
-            set_windows_startup_enabled(False)
-            self.log("Windows 자동 실행 해제 완료.")
+        set_windows_startup_enabled(False)
+        self.log("Windows 자동 실행 해제 완료.")
 
     def setup_watch_folder_drag_and_drop(self):
         """감시 폴더 입력란에 드래그 앤 드롭을 연결한다."""
@@ -1932,15 +1995,6 @@ class MessengerDocsApp:
         try:
             save_app_config(config_data, config_path=CONFIG_FILE_STR)
             self.max_cache_size.set(str(config_data["max_cache_size"]))
-            try:
-                self.sync_windows_startup_setting()
-            except Exception as autostart_error:
-                self.log(f"경고: Windows 자동 실행 설정 적용 실패 - {autostart_error}")
-                messagebox.showwarning(
-                    "Windows 자동 실행",
-                    f"설정 파일은 저장되었지만 Windows 자동 실행 적용에는 실패했습니다.\n{autostart_error}",
-                    parent=self.root,
-                )
             self.log("설정 저장 완료.")
             self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
@@ -1968,7 +2022,7 @@ class MessengerDocsApp:
         """설정 딕셔너리를 UI 상태에 반영한다."""
         normalized_config = normalize_config_data(config_data) if normalize_config_data else config_data
         self.first_run.set(normalized_config.get("first_run", True))
-        self.launch_on_windows_startup.set(normalized_config.get("launch_on_windows_startup", False))
+        self.set_launch_on_windows_startup_value(normalized_config.get("launch_on_windows_startup", False), suppress_sync=True)
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
         self.docs_target_locked.set(False)
@@ -2208,7 +2262,7 @@ class MessengerDocsApp:
                         f"시작 시 도움말: {'표시' if self.show_help_on_startup.get() else '숨김'}",
                         f"작업 결과 알림: {'표시' if self.show_success_notifications.get() else '숨김'}",
                         f"작업 결과 효과음: {'재생' if self.play_event_sounds.get() else '꺼짐'}",
-                        f"Windows 자동 실행: {'사용' if self.launch_on_windows_startup.get() else '사용 안 함'}",
+                        f"Windows 자동 실행: {'켜짐' if self.launch_on_windows_startup.get() else '꺼짐'}",
                     ]
                 )
             )
@@ -2429,7 +2483,7 @@ class MessengerDocsApp:
             offvalue=False,
             font=self.build_ui_font(12),
         ).pack(anchor="w", pady=4)
-        wizard_autostart_checkbox = ctk.CTkCheckBox(
+        wizard_autostart_switch = ctk.CTkSwitch(
             step_three,
             text="Windows 로그인 시 자동으로 실행",
             variable=self.launch_on_windows_startup,
@@ -2437,9 +2491,15 @@ class MessengerDocsApp:
             offvalue=False,
             font=self.build_ui_font(12),
         )
-        wizard_autostart_checkbox.pack(anchor="w", pady=4)
+        wizard_autostart_switch.pack(anchor="w", pady=4)
         if not (supports_windows_startup and supports_windows_startup()):
-            wizard_autostart_checkbox.configure(state="disabled")
+            wizard_autostart_switch.configure(state="disabled")
+        ctk.CTkLabel(
+            step_three,
+            text="스위치를 바꾸면 Windows 시작프로그램 등록 상태가 바로 반영됩니다.",
+            font=self.build_ui_font(11),
+            text_color=("gray45", "gray70"),
+        ).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
             step_three,
             text="현재 설정 요약",
