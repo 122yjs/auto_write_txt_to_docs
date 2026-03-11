@@ -43,6 +43,9 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("def update_windows_startup_ui_state", self.main_gui_source)
         self.assertIn("def refresh_windows_startup_setting_from_system", self.main_gui_source)
         self.assertIn("def sync_windows_startup_setting", self.main_gui_source)
+        self.assertIn("def on_windows_startup_setting_changed", self.main_gui_source)
+        self.assertIn("def persist_windows_startup_preference", self.main_gui_source)
+        self.assertIn("def can_manage_windows_startup", self.main_gui_source)
         self.assertIn("감시 일시 정지/재개", self.main_gui_source)
         self.assertIn("Docs 웹에서 열기", self.main_gui_source)
         self.assertIn("로그 보기", self.main_gui_source)
@@ -60,6 +63,7 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("first_run", self.main_gui_source)
         self.assertIn("launch_on_windows_startup", self.main_gui_source)
         self.assertIn("autostart_hint", self.main_gui_source)
+        self.assertIn("self._suppress_autostart_trace = False", self.main_gui_source)
         self.assertIn("show_success_notifications", self.main_gui_source)
         self.assertIn("play_event_sounds", self.main_gui_source)
         self.assertIn("self.show_success_notifications.get()", self.main_gui_source)
@@ -74,6 +78,8 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn("2. Google Docs 연결", self.main_gui_source)
         self.assertIn("3. 알림 및 마무리", self.main_gui_source)
         self.assertIn("나중에", self.main_gui_source)
+        self.assertIn("Windows 자동 실행: {'켜짐' if self.launch_on_windows_startup.get() else '꺼짐'}", self.main_gui_source)
+        self.assertIn('text="스위치를 바꾸면 Windows 시작프로그램 등록 상태가 바로 반영됩니다."', self.main_gui_source)
         self.assertIn("def configure_log_tags", self.main_gui_source)
         self.assertIn("def get_log_tag_name", self.main_gui_source)
         self.assertIn("def append_log_to_widget", self.main_gui_source)
@@ -96,6 +102,7 @@ class MainGuiDocsActionsTests(unittest.TestCase):
         self.assertIn('text="캐시 폴더 열기"', self.main_window_ui_source)
         self.assertIn('text="로그 팝업"', self.main_window_ui_source)
         self.assertIn('"open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR))', self.main_gui_source)
+        self.assertIn('self.launch_on_windows_startup.trace_add("write", self.on_windows_startup_setting_changed)', self.main_gui_source)
 
 
 if __name__ == "__main__":

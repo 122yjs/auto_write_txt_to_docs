@@ -73,6 +73,7 @@ class MainGuiTestBase(unittest.TestCase):
             CTkFrame=FakeFrame,
             CTkButton=FakeButton,
             CTkEntry=FakeEntry,
+            CTkSwitch=FakeButton,
             END="end",
             set_appearance_mode=Mock(),
         )
@@ -105,6 +106,7 @@ class MainGuiTestBase(unittest.TestCase):
         app.watch_folder_browse_button = FakeButton("폴더 선택")
         app.watch_folder_open_button = FakeButton("열기")
         app.cache_folder_button = FakeButton("캐시 폴더 열기")
+        app.autostart_switch = FakeButton("Windows 자동 실행")
 
         app.create_doc_button = FakeButton("새 문서 만들기")
         app.manual_doc_input_button = FakeButton("기존 문서 주소 입력")
@@ -295,6 +297,80 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         app.disable_settings_widgets.assert_called_once()
         fake_thread.start.assert_called_once()
         app.log.assert_any_call("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
+
+
+class MainGuiAutostartTests(MainGuiTestBase):
+    def test_on_windows_startup_setting_changed_applies_immediately_and_persists_preference(self):
+        app = self.build_app()
+        app.settings_changed = False
+        app.launch_on_windows_startup.set(True)
+
+        with patch.object(main_gui, "supports_windows_startup", return_value=True), patch.object(
+            main_gui,
+            "is_windows_startup_enabled",
+            return_value=False,
+        ), patch.object(main_gui, "set_windows_startup_enabled") as set_enabled, patch.object(
+            main_gui,
+            "load_app_config",
+            return_value=({"watch_folder": "C:/saved", "launch_on_windows_startup": False}, "config.json", False, True),
+        ), patch.object(main_gui, "save_app_config") as save_config, patch.object(
+            main_gui.messagebox,
+            "showwarning",
+        ) as show_warning:
+            app.on_windows_startup_setting_changed()
+
+        set_enabled.assert_called_once_with(True)
+        save_config.assert_called_once()
+        persisted_config = save_config.call_args.args[0]
+        self.assertEqual(persisted_config["watch_folder"], "C:/saved")
+        self.assertTrue(persisted_config["launch_on_windows_startup"])
+        self.assertFalse(app.settings_changed)
+        show_warning.assert_not_called()
+
+    def test_on_windows_startup_setting_changed_rolls_back_ui_when_apply_fails(self):
+        app = self.build_app()
+        app.launch_on_windows_startup.set(True)
+
+        with patch.object(main_gui, "supports_windows_startup", return_value=True), patch.object(
+            main_gui,
+            "is_windows_startup_enabled",
+            return_value=False,
+        ), patch.object(
+            main_gui,
+            "set_windows_startup_enabled",
+            side_effect=RuntimeError("권한 부족"),
+        ), patch.object(main_gui.messagebox, "showwarning") as show_warning:
+            app.on_windows_startup_setting_changed()
+
+        self.assertFalse(app.launch_on_windows_startup.get())
+        show_warning.assert_called_once()
+
+    def test_save_config_no_longer_syncs_windows_startup_setting(self):
+        app = self.build_app()
+        app.settings_changed = True
+        app.get_current_config_data = Mock(
+            return_value={
+                "first_run": True,
+                "launch_on_windows_startup": False,
+                "watch_folder": "",
+                "docs_input": "",
+                "show_help_on_startup": True,
+                "show_success_notifications": True,
+                "play_event_sounds": True,
+                "file_extensions": ".txt",
+                "use_regex_filter": False,
+                "regex_pattern": "",
+                "appearance_mode": "System",
+                "max_cache_size": 10000,
+            }
+        )
+        app.sync_windows_startup_setting = Mock(side_effect=AssertionError("호출되면 안 됩니다."))
+
+        with patch.object(main_gui, "save_app_config") as save_config:
+            app.save_config()
+
+        save_config.assert_called_once()
+        self.assertFalse(app.settings_changed)
 
 
 if __name__ == "__main__":

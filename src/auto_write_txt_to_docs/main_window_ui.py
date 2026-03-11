@@ -388,7 +388,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         anchor="w",
         font=_font(ctk, 13, "bold", family=font_family),
     ).pack(side="left", padx=(0, 8))
-    autostart_checkbox = ctk.CTkCheckBox(
+    autostart_switch = ctk.CTkSwitch(
         autostart_row,
         text="Windows 로그인 시 자동으로 실행",
         variable=state_vars["launch_on_windows_startup"],
@@ -396,7 +396,11 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         offvalue=False,
         font=_font(ctk, 12, family=font_family),
     )
-    autostart_checkbox.pack(side="left", padx=4)
+    autostart_switch.pack(side="left", padx=4)
+    _attach_tooltip(
+        autostart_switch,
+        "스위치를 바꾸면 Windows 시작프로그램 폴더의 자동 실행 상태가 바로 변경됩니다.",
+    )
 
     autostart_hint_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     autostart_hint_row.pack(fill="x", padx=14, pady=(0, 4))
@@ -524,7 +528,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
         "max_cache_size_entry": max_cache_size_entry,
         "cache_folder_button": cache_folder_button,
         "notification_checkbox": notification_checkbox,
-        "autostart_checkbox": autostart_checkbox,
+        "autostart_switch": autostart_switch,
         "autostart_hint_label": autostart_hint_label,
         "docs_input_entry": docs_input_entry,
         "create_doc_button": create_doc_button,
