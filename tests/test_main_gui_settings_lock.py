@@ -63,6 +63,13 @@ class FakeLabel(FakeWidget):
 
 
 class FakeRoot:
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay, callback):
+        self.after_calls.append((delay, callback))
+        return len(self.after_calls)
+
     def winfo_exists(self):
         return True
 
@@ -84,7 +91,9 @@ class MainGuiTestBase(unittest.TestCase):
         app.settings_frame = FakeFrame()
         app.first_run = FakeVar(True)
         app.launch_on_windows_startup = FakeVar(False)
+        app.check_updates_on_startup = FakeVar(True)
         app.watch_folder = FakeVar("")
+        app.update_check_status = FakeVar("")
         app.docs_input = FakeVar("")
         app.docs_target_locked = FakeVar(False)
         app.show_help_on_startup = FakeVar(True)
@@ -101,6 +110,8 @@ class MainGuiTestBase(unittest.TestCase):
         app.update_windows_startup_ui_state = Mock()
         app.is_monitoring = False
         app.monitoring_thread = None
+        app.latest_release_info = None
+        app._update_check_in_progress = False
 
         app.watch_folder_entry = FakeEntry()
         app.watch_folder_browse_button = FakeButton("폴더 선택")
@@ -300,6 +311,63 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
 
 
 class MainGuiAutostartTests(MainGuiTestBase):
+    def test_apply_update_check_result_updates_status_for_latest_version(self):
+        app = self.build_app()
+
+        app.apply_update_check_result(
+            {
+                "current_version": "0.6.0",
+                "latest_version": "0.6.0",
+                "update_available": False,
+                "release_url": "https://example.com/releases/v0.6.0",
+            }
+        )
+
+        self.assertEqual(app.update_check_status.get(), "현재 최신 버전(v0.6.0)을 사용 중입니다.")
+
+    def test_apply_config_data_reflects_disabled_startup_update_check_hint(self):
+        app = self.build_app()
+
+        with patch.object(main_gui, "ctk", self.fake_ctk):
+            app.apply_config_data({"check_updates_on_startup": False})
+
+        self.assertEqual(
+            app.update_check_status.get(),
+            "시작 시 최신 버전 확인이 꺼져 있습니다. '지금 확인'으로 수동 검사할 수 있습니다.",
+        )
+
+    def test_apply_update_check_result_opens_release_page_when_user_confirms(self):
+        app = self.build_app()
+
+        with patch.object(main_gui.messagebox, "askyesno", return_value=True), patch.object(
+            main_gui.webbrowser,
+            "open",
+        ) as open_browser:
+            app.apply_update_check_result(
+                {
+                    "current_version": "0.6.0",
+                    "latest_version": "0.6.1",
+                    "update_available": True,
+                    "release_url": "https://example.com/releases/v0.6.1",
+                },
+                user_initiated=True,
+            )
+
+        open_browser.assert_called_once_with("https://example.com/releases/v0.6.1")
+        self.assertIn("새 버전 v0.6.1 사용 가능", app.update_check_status.get())
+
+    def test_apply_update_check_error_offers_release_page_when_user_requests_manual_check(self):
+        app = self.build_app()
+
+        with patch.object(main_gui.messagebox, "askyesno", return_value=True), patch.object(
+            main_gui.webbrowser,
+            "open",
+        ) as open_browser:
+            app.apply_update_check_error("네트워크 오류", user_initiated=True)
+
+        open_browser.assert_called_once()
+        self.assertEqual(app.update_check_status.get(), "최신 버전 확인 실패: 네트워크 오류")
+
     def test_on_windows_startup_setting_changed_applies_immediately_and_persists_preference(self):
         app = self.build_app()
         app.settings_changed = False
@@ -352,6 +420,7 @@ class MainGuiAutostartTests(MainGuiTestBase):
             return_value={
                 "first_run": True,
                 "launch_on_windows_startup": False,
+                "check_updates_on_startup": True,
                 "watch_folder": "",
                 "docs_input": "",
                 "show_help_on_startup": True,
