@@ -243,7 +243,7 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(record["file_title"], "중복로그.txt")
         self.assertEqual(record["line_count"], 7)
         self.assertTrue(record["duplicate_only"])
-        self.assertIn("중복 내용으로 본문 추가 없음", record["document_text"])
+        self.assertEqual(record["document_text"], "\n# 중복 파일: 중복로그.txt\n\n")
         self.assertIn("내용 7줄은 기존 기록과 모두 중복", record["preview_text"])
 
     def test_missing_docs_service_keeps_size_and_schedules_retry(self):
@@ -341,8 +341,7 @@ class BackendProcessorTests(unittest.TestCase):
 
         self.assertEqual(len(fake_docs_service.calls), 1)
         inserted_text = fake_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
-        self.assertIn("본래 파일 제목:", inserted_text)
-        self.assertIn("중복 내용으로 본문 추가 없음", inserted_text)
+        self.assertEqual(inserted_text, f"\n# 중복 파일: {os.path.basename(filepath)}\n\n")
         self.assertTrue(any("파일명 기록 시도" in message for message in logs))
         self.assertTrue(any("중복 파일명 기록 완료" in message for message in logs))
         self.assertEqual(len(extracted_results), 1)
@@ -403,7 +402,7 @@ class BackendProcessorTests(unittest.TestCase):
 
         self.assertEqual(len(second_docs_service.calls), 1)
         inserted_text = second_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
-        self.assertIn("중복 내용으로 본문 추가 없음", inserted_text)
+        self.assertEqual(inserted_text, "\n# 중복 파일: 같은이름.txt\n\n")
         self.assertTrue(any("처리 상태를 초기화합니다" in message for message in logs))
         self.assertTrue(any("중복 파일명 기록 완료" in message for message in logs))
 

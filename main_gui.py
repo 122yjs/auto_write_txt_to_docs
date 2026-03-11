@@ -109,6 +109,12 @@ except ImportError:
     show_backup_restore_dialog = None
 
 try:
+    from src.auto_write_txt_to_docs.result_popup import ResultPopupPresenter
+except ImportError:
+    logging.error("작업 결과 팝업 모듈(result_popup.py)을 찾을 수 없습니다.")
+    ResultPopupPresenter = None
+
+try:
     from src.auto_write_txt_to_docs.main_window_ui import build_main_window_ui
 except ImportError:
     logging.error("메인 창 UI 모듈(main_window_ui.py)을 찾을 수 없습니다.")
@@ -370,10 +376,19 @@ def build_work_result_notification(
 
     return NOTIFICATION_TITLE, ""
 
+
+def get_notification_visual_level(event_type):
+    """이벤트 유형을 팝업/시각 레벨로 정규화한다."""
+    if event_type in {"duplicate_recorded", "duplicate_skipped"}:
+        return "duplicate"
+    if event_type == "failure":
+        return "failure"
+    return "success"
+
 class MessengerDocsApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("메신저 Docs 자동 기록 (트레이)")
+        self.root.title("메신저 Docs 자동 기록")
         self.ui_font_family = detect_ui_font_family(self.root)
         # 초기 창 크기를 충분히 크게 설정하고, 최소 크기도 지정하여 버튼이 잘리는 현상 방지
         self.root.geometry("980x750")
@@ -431,6 +446,7 @@ class MessengerDocsApp:
         
         # 로깅 시스템 초기화
         self.setup_logging()
+        self.result_popup_presenter = ResultPopupPresenter(self.root) if ResultPopupPresenter else None
         
         # 설정 변수 변경 감지를 위한 추적
         self.first_run.trace_add("write", self.on_setting_changed)
@@ -1402,16 +1418,38 @@ class MessengerDocsApp:
             self.log("트레이 아이콘 스레드 시작됨.")
             
     def show_tray_notification(self, title, message):
-        """트레이 아이콘에 알림 표시"""
+        """트레이 아이콘에 보조 알림을 표시한다."""
         if self.tray_icon and hasattr(self.tray_icon, 'notify'):
             try:
                 # 트레이 아이콘이 실행 중이고 notify 메서드가 있는 경우
                 self.tray_icon.notify(message, title)
                 self.log(f"트레이 알림 표시: {title}")
+                return True
             except Exception as e:
                 self.log(f"트레이 알림 표시 실패: {e}")
+                return False
         else:
             self.log("트레이 아이콘이 초기화되지 않아 알림을 표시할 수 없습니다.")
+            return False
+
+    def show_result_popup_notification(self, title, message, event_type):
+        """작업 결과를 화면 우하단 팝업으로 표시한다."""
+        popup_presenter = getattr(self, "result_popup_presenter", None)
+        if popup_presenter is None:
+            self.log("작업 결과 팝업 표시기를 사용할 수 없어 화면 팝업을 건너뜁니다.")
+            return False
+
+        visual_level = get_notification_visual_level(event_type)
+        try:
+            popup_sent = popup_presenter.show(title, message, visual_level)
+            if popup_sent:
+                self.log(f"화면 팝업 알림 표시: {title}")
+            else:
+                self.log(f"화면 팝업 알림을 표시하지 못했습니다: {title}")
+            return popup_sent
+        except Exception as exc:
+            self.log(f"화면 팝업 알림 표시 실패: {exc}")
+            return False
 
     def play_event_sound(self, event_type):
         """작업 결과 유형에 맞는 시스템 효과음을 재생한다."""
@@ -1445,7 +1483,7 @@ class MessengerDocsApp:
         preview_text="",
         error_summary=None,
     ):
-        """백그라운드 작업 결과를 트레이 알림과 효과음으로 전달한다."""
+        """백그라운드 작업 결과를 화면 팝업, 트레이 알림, 효과음으로 전달한다."""
         notification_title, notification_message = build_work_result_notification(
             event_type,
             filename=filename,
@@ -1469,8 +1507,13 @@ class MessengerDocsApp:
         notification_sent = False
         if self.show_success_notifications.get():
             try:
-                self.show_tray_notification(notification_title, notification_message)
-                notification_sent = True
+                popup_sent = self.show_result_popup_notification(
+                    notification_title,
+                    notification_message,
+                    event_type,
+                )
+                tray_sent = self.show_tray_notification(notification_title, notification_message)
+                notification_sent = popup_sent or tray_sent
             except Exception as exc:
                 self.log(f"알림 처리 중 오류: {exc}")
 
@@ -1521,6 +1564,12 @@ class MessengerDocsApp:
     def exit_application(self, *args): # 트레이 메뉴 '종료'에서 호출됨
         """ 애플리케이션 완전 종료 """
         self.log("애플리케이션 종료 시작...")
+
+        if getattr(self, "result_popup_presenter", None):
+            try:
+                self.result_popup_presenter.close()
+            except Exception as exc:
+                self.log(f"작업 결과 팝업 종료 중 오류: {exc}")
         
         # 1. 트레이 아이콘 먼저 중지 (GUI 이벤트 루프에 덜 의존적일 수 있음)
         if self.tray_icon:
