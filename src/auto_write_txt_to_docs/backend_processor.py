@@ -144,13 +144,7 @@ def build_duplicate_only_record(filepath, duplicate_line_count, extracted_at=Non
         "본문 추가를 생략했습니다."
     )
 
-    header = (
-        f"\n{'#' * 60}\n"
-        f"# 본래 파일 제목: {file_title}\n"
-        f"# 추출된 시간: {extracted_time_text}\n"
-        f"# 처리 결과: 중복 내용으로 본문 추가 없음\n"
-        f"{'#' * 60}\n"
-    )
+    document_marker = f"\n# 중복 파일: {file_title}\n\n"
 
     return {
         'file_title': file_title,
@@ -158,7 +152,7 @@ def build_duplicate_only_record(filepath, duplicate_line_count, extracted_at=Non
         'line_count': duplicate_line_count,
         'preview_text': summary_text,
         'full_text': summary_text,
-        'document_text': header + summary_text + "\n\n",
+        'document_text': document_marker,
         'duplicate_only': True,
     }
 

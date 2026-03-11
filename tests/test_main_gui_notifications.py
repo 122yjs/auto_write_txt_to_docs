@@ -19,6 +19,15 @@ class FakeVar:
         return self.value
 
 
+class FakePopupPresenter:
+    def __init__(self):
+        self.calls = []
+
+    def show(self, title, message, level):
+        self.calls.append((title, message, level))
+        return True
+
+
 class MainGuiNotificationTests(unittest.TestCase):
     def test_extract_docs_update_line_count_from_attempt_log(self):
         self.assertEqual(
@@ -106,13 +115,61 @@ class MainGuiNotificationTests(unittest.TestCase):
             )
         )
 
-    def test_notify_background_event_respects_sound_toggle(self):
+    def test_show_result_popup_notification_maps_duplicate_event_to_duplicate_level(self):
+        app = MessengerDocsApp.__new__(MessengerDocsApp)
+        presenter = FakePopupPresenter()
+        app.result_popup_presenter = presenter
+        app.log = lambda _message: None
+
+        result = app.show_result_popup_notification(
+            "메신저 Docs 자동 기록",
+            "sample.txt · 모든 내용이 중복",
+            "duplicate_skipped",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            presenter.calls,
+            [("메신저 Docs 자동 기록", "sample.txt · 모든 내용이 중복", "duplicate")],
+        )
+
+    def test_notify_background_event_uses_popup_before_tray_when_enabled(self):
+        app = MessengerDocsApp.__new__(MessengerDocsApp)
+        app.show_success_notifications = FakeVar(True)
+        app.play_event_sounds = FakeVar(True)
+        app.recent_failure_notifications = {}
+        call_order = []
+        sound_calls = []
+        app.show_result_popup_notification = lambda title, message, event_type: call_order.append(
+            ("popup", title, message, event_type)
+        ) or True
+        app.show_tray_notification = lambda title, message: call_order.append(("tray", title, message)) or True
+        app.play_event_sound = lambda event_type: sound_calls.append(event_type)
+        app.log = lambda _message: None
+
+        result = app.notify_background_event(
+            "success",
+            filename="sample.txt",
+            line_count=2,
+            preview_text="첫 줄\n둘째 줄",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(call_order[0][0], "popup")
+        self.assertEqual(call_order[1][0], "tray")
+        self.assertEqual(sound_calls, ["success"])
+
+    def test_notify_background_event_skips_popup_and_tray_when_notifications_disabled(self):
         app = MessengerDocsApp.__new__(MessengerDocsApp)
         app.show_success_notifications = FakeVar(False)
         app.play_event_sounds = FakeVar(True)
         app.recent_failure_notifications = {}
+        popup_calls = []
         tray_calls = []
         sound_calls = []
+        app.show_result_popup_notification = lambda title, message, event_type: popup_calls.append(
+            (title, message, event_type)
+        ) or True
         app.show_tray_notification = lambda title, message: tray_calls.append((title, message))
         app.play_event_sound = lambda event_type: sound_calls.append(event_type)
         app.log = lambda _message: None
@@ -124,6 +181,7 @@ class MainGuiNotificationTests(unittest.TestCase):
             preview_text="첫 줄\n둘째 줄",
         )
 
+        self.assertEqual(popup_calls, [])
         self.assertEqual(tray_calls, [])
         self.assertEqual(sound_calls, ["success"])
 
@@ -132,8 +190,12 @@ class MainGuiNotificationTests(unittest.TestCase):
         app.show_success_notifications = FakeVar(True)
         app.play_event_sounds = FakeVar(True)
         app.recent_failure_notifications = {}
+        popup_calls = []
         tray_calls = []
         sound_calls = []
+        app.show_result_popup_notification = lambda title, message, event_type: popup_calls.append(
+            (title, message, event_type)
+        ) or True
         app.show_tray_notification = lambda title, message: tray_calls.append((title, message))
         app.play_event_sound = lambda event_type: sound_calls.append(event_type)
         app.log = lambda _message: None
@@ -152,6 +214,7 @@ class MainGuiNotificationTests(unittest.TestCase):
 
         self.assertTrue(first_result)
         self.assertFalse(second_result)
+        self.assertEqual(len(popup_calls), 1)
         self.assertEqual(len(tray_calls), 1)
         self.assertEqual(sound_calls, ["failure"])
 
