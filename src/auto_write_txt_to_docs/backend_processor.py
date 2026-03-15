@@ -18,7 +18,7 @@ from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유
 try:
     from .google_auth import GoogleAuthActionRequired, get_google_services
 except ImportError:
-    print("오류: google_auth.py 모듈을 찾을 수 없습니다. Google API 인증 기능이 작동하지 않습니다.")
+    logging.error("ERROR: google_auth.py module is missing. Google API authentication is disabled.")
     GoogleAuthActionRequired = Exception
     get_google_services = None
 

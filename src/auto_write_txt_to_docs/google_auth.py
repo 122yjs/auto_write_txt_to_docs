@@ -25,7 +25,7 @@ except ImportError:
             get_effective_credentials_path,
         )
     except ImportError:
-        print("오류: path_utils.py 파일을 찾을 수 없습니다. Google 인증이 작동하지 않습니다.")
+        logging.error("ERROR: path_utils.py module is missing. Google authentication is disabled.")
         BUNDLED_CREDENTIALS_FILE_STR = None
         USER_CREDENTIALS_FILE_STR = None
         TOKEN_FILE_STR = "token.json"
