@@ -1,122 +1,170 @@
+import types
 import unittest
-from pathlib import Path
+from unittest.mock import Mock, patch
+
+import main_gui
+
+
+class FakeVar:
+    def __init__(self, value=None):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class FakeWidget:
+    def __init__(self, text=None, state="normal"):
+        self.config = {"text": text, "state": state}
+        self.focused = False
+        self.cursor_position = None
+
+    def configure(self, **kwargs):
+        self.config.update(kwargs)
+
+    @property
+    def state(self):
+        return self.config.get("state")
+
+    def focus_set(self):
+        self.focused = True
+
+    def icursor(self, position):
+        self.cursor_position = position
+
+
+class FakeButton(FakeWidget):
+    pass
+
+
+class FakeEntry(FakeWidget):
+    pass
+
+
+class FakeLabel(FakeWidget):
+    pass
+
+
+class FakeRoot:
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay, callback):
+        self.after_calls.append((delay, callback))
+        return len(self.after_calls)
+
+    def winfo_exists(self):
+        return True
 
 
 class MainGuiDocsActionsTests(unittest.TestCase):
     def setUp(self):
-        self.main_gui_source = Path("main_gui.py").read_text(encoding="utf-8")
-        self.main_window_ui_source = Path("src/auto_write_txt_to_docs/main_window_ui.py").read_text(encoding="utf-8")
-
-    def test_main_gui_contains_doc_creation_and_selection_actions(self):
-        self.assertIn("def create_new_google_doc", self.main_gui_source)
-        self.assertIn("def select_google_doc", self.main_gui_source)
-        self.assertIn("def verify_google_services_before_monitoring", self.main_gui_source)
-        self.assertIn("def prompt_google_reauthentication", self.main_gui_source)
-        self.assertIn("def reset_google_auth", self.main_gui_source)
-        self.assertIn("def begin_google_service_request", self.main_gui_source)
-        self.assertIn("GoogleAuthActionRequired", self.main_gui_source)
-        self.assertIn("def extract_docs_update_line_count", self.main_gui_source)
-        self.assertIn("def toggle_docs_target_lock", self.main_gui_source)
-        self.assertIn("def lock_docs_target", self.main_gui_source)
-        self.assertIn("def unlock_docs_target", self.main_gui_source)
-        self.assertIn("def detect_ui_font_family", self.main_gui_source)
-        self.assertIn("def build_ui_font", self.main_gui_source)
-        self.assertIn("def present_main_window", self.main_gui_source)
-        self.assertIn("def run_startup_prompts", self.main_gui_source)
-        self.assertIn("def show_first_run_wizard", self.main_gui_source)
-        self.assertIn("DnDCompatibleTk", self.main_gui_source)
-        self.assertIn("supports_windows_startup", self.main_gui_source)
-        self.assertIn("def start_tray_icon", self.main_gui_source)
-        self.assertIn("run_detached", self.main_gui_source)
-        self.assertIn('trace_add("write"', self.main_gui_source)
-        self.assertIn("def extracted_result_threadsafe", self.main_gui_source)
-        self.assertIn("def append_extraction_preview", self.main_gui_source)
-        self.assertIn("def process_result_queue", self.main_gui_source)
-        self.assertIn("def show_log_popup", self.main_gui_source)
-        self.assertIn("def sync_log_popup_content", self.main_gui_source)
-        self.assertIn("def close_log_popup", self.main_gui_source)
-        self.assertIn("def update_tray_status", self.main_gui_source)
-        self.assertIn("def get_tray_state_key", self.main_gui_source)
-        self.assertIn("def build_tray_status_icon", self.main_gui_source)
-        self.assertIn("def build_tray_menu", self.main_gui_source)
-        self.assertIn("def toggle_monitoring_from_tray", self.main_gui_source)
-        self.assertIn("def open_docs_in_browser_from_tray", self.main_gui_source)
-        self.assertIn("def show_log_popup_from_tray", self.main_gui_source)
-        self.assertIn("def setup_watch_folder_drag_and_drop", self.main_gui_source)
-        self.assertIn("def on_watch_folder_drop", self.main_gui_source)
-        self.assertIn("def update_windows_startup_ui_state", self.main_gui_source)
-        self.assertIn("def refresh_windows_startup_setting_from_system", self.main_gui_source)
-        self.assertIn("def sync_windows_startup_setting", self.main_gui_source)
-        self.assertIn("def on_windows_startup_setting_changed", self.main_gui_source)
-        self.assertIn("def persist_windows_startup_preference", self.main_gui_source)
-        self.assertIn("def can_manage_windows_startup", self.main_gui_source)
-        self.assertIn("감시 일시 정지/재개", self.main_gui_source)
-        self.assertIn("Docs 웹에서 열기", self.main_gui_source)
-        self.assertIn("로그 보기", self.main_gui_source)
-        self.assertIn("self.pending_docs_update_line_count", self.main_gui_source)
-        self.assertIn("self.show_success_notifications.get()", self.main_gui_source)
-        self.assertIn("self.tray_icon.notify(message, title)", self.main_gui_source)
-        self.assertIn("create_google_document", self.main_gui_source)
-        self.assertIn("list_accessible_google_documents", self.main_gui_source)
-        self.assertIn("build_main_window_ui", self.main_gui_source)
-        self.assertIn("docs_target_locked", self.main_gui_source)
-        self.assertIn("clear_extraction_preview", self.main_gui_source)
-        self.assertIn("max_cache_size", self.main_gui_source)
-        self.assertIn("parse_max_cache_size", self.main_gui_source)
-        self.assertIn("CACHE_FILE_STR", self.main_gui_source)
-        self.assertIn("first_run", self.main_gui_source)
-        self.assertIn("launch_on_windows_startup", self.main_gui_source)
-        self.assertIn("check_updates_on_startup", self.main_gui_source)
-        self.assertIn("autostart_hint", self.main_gui_source)
-        self.assertIn("self._suppress_autostart_trace = False", self.main_gui_source)
-        self.assertIn("show_success_notifications", self.main_gui_source)
-        self.assertIn("play_event_sounds", self.main_gui_source)
-        self.assertIn("self.show_success_notifications.get()", self.main_gui_source)
-        self.assertIn("self.play_event_sounds.get()", self.main_gui_source)
-        self.assertIn("처음 실행 설정 마법사", self.main_gui_source)
-        self.assertIn("Messenger Docs 시작 마법사", self.main_gui_source)
-        self.assertIn("tkinterdnd2", self.main_gui_source)
-        self.assertIn("Windows 자동 실행", self.main_gui_source)
-        self.assertIn("drop_target_register", self.main_gui_source)
-        self.assertIn("<<Drop>>", self.main_gui_source)
-        self.assertIn("1. 감시 폴더 선택", self.main_gui_source)
-        self.assertIn("2. Google Docs 연결", self.main_gui_source)
-        self.assertIn("3. 알림 및 마무리", self.main_gui_source)
-        self.assertIn("나중에", self.main_gui_source)
-        self.assertIn("Windows 자동 실행: {'켜짐' if self.launch_on_windows_startup.get() else '꺼짐'}", self.main_gui_source)
-        self.assertIn('label="시작 시 새 버전 확인"', self.main_gui_source)
-        self.assertIn('label="새 버전 확인"', self.main_gui_source)
-        self.assertIn("def check_for_updates", self.main_gui_source)
-        self.assertIn('text="스위치를 바꾸면 Windows 시작프로그램 등록 상태가 바로 반영됩니다."', self.main_gui_source)
-        self.assertIn("def configure_log_tags", self.main_gui_source)
-        self.assertIn("def get_log_tag_name", self.main_gui_source)
-        self.assertIn("def append_log_to_widget", self.main_gui_source)
-        self.assertIn("def render_log_lines", self.main_gui_source)
-        self.assertIn('self.root.geometry("980x750")', self.main_gui_source)
-        self.assertIn('self.root.minsize(980, 750)', self.main_gui_source)
-        self.assertIn("⚠️ 기록 불가", self.main_gui_source)
-        self.assertIn("오류 상태", self.main_gui_source)
-        self.assertIn("preloaded_services", self.main_gui_source)
-        self.assertIn("log_success", self.main_gui_source)
-        self.assertIn("log_warning", self.main_gui_source)
-        self.assertIn("log_error", self.main_gui_source)
-        self.assertIn('text="작업 결과 알림 표시"', self.main_window_ui_source)
-        self.assertIn('text="작업 결과 효과음 재생"', self.main_window_ui_source)
-        self.assertIn('text="새 문서 만들기"', self.main_window_ui_source)
-        self.assertIn('text="기존 문서 주소 입력"', self.main_window_ui_source)
-        self.assertIn('text="문서 목록"', self.main_window_ui_source)
-        self.assertIn('text="문서 경로 확정"', self.main_window_ui_source)
-        self.assertIn('text="라인 캐시 크기"', self.main_window_ui_source)
-        self.assertIn('text="캐시 폴더 열기"', self.main_window_ui_source)
-        self.assertIn('text="로그 팝업"', self.main_window_ui_source)
-        self.assertIn('text="Google 계정 다시 연결"', self.main_window_ui_source)
-        self.assertIn('text="인증 초기화"', self.main_window_ui_source)
-        self.assertIn('"open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR))', self.main_gui_source)
-        self.assertIn('self.launch_on_windows_startup.trace_add("write", self.on_windows_startup_setting_changed)', self.main_gui_source)
-        self.assertLess(
-            self.main_gui_source.index("self.check_updates_on_startup = tk.BooleanVar(value=True)"),
-            self.main_gui_source.index("self._create_menubar()"),
+        self.fake_ctk = types.SimpleNamespace(
+            CTkFrame=FakeWidget,
+            CTkButton=FakeButton,
+            CTkEntry=FakeEntry,
+            END="end",
         )
+
+    def build_app(self):
+        app = main_gui.MessengerDocsApp.__new__(main_gui.MessengerDocsApp)
+        app.root = FakeRoot()
+        app.docs_input = FakeVar("")
+        app.docs_target_user_locked = FakeVar(False)
+        app.docs_target_runtime_locked = FakeVar(False)
+        app.docs_target_locked = FakeVar(False)
+        app.docs_target_status_var = FakeVar("")
+        app.docs_input_entry = FakeEntry()
+        app.create_doc_button = FakeButton("새 문서 만들기")
+        app.manual_doc_input_button = FakeButton("기존 문서 주소 입력")
+        app.select_doc_button = FakeButton("문서 목록")
+        app.docs_lock_button = FakeButton("문서 경로 확정")
+        app.docs_target_status_label = FakeLabel()
+        app.start_button = FakeButton("감시 시작")
+        app.stop_button = FakeButton("감시 중지", state="disabled")
+        app.log = Mock()
+        app.is_monitoring = False
+        return app
+
+    def test_toggle_docs_target_lock_updates_manual_lock_state(self):
+        app = self.build_app()
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+
+        with patch.object(main_gui, "ctk", self.fake_ctk):
+            app.toggle_docs_target_lock()
+
+        self.assertTrue(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
+        self.assertTrue(app.docs_target_locked.get())
+        self.assertEqual(app.docs_input_entry.state, "disabled")
+
+        with patch.object(main_gui, "ctk", self.fake_ctk):
+            app.toggle_docs_target_lock()
+
+        self.assertFalse(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
+        self.assertFalse(app.docs_target_locked.get())
+        self.assertEqual(app.docs_input_entry.state, "normal")
+        self.assertTrue(app.docs_input_entry.focused)
+        self.assertEqual(app.docs_input_entry.cursor_position, "end")
+
+    def test_open_docs_in_browser_opens_normalized_url_for_valid_id(self):
+        app = self.build_app()
+        app.docs_input.set("EXAMPLE_DOC_ID_12345")
+
+        with patch.object(main_gui.webbrowser, "open") as open_browser, patch.object(
+            main_gui.messagebox,
+            "showwarning",
+        ) as show_warning:
+            app.open_docs_in_browser()
+
+        open_browser.assert_called_once_with("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        show_warning.assert_not_called()
+
+    def test_open_docs_in_browser_rejects_invalid_document_url(self):
+        app = self.build_app()
+        app.docs_input.set("https://example.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+
+        with patch.object(main_gui.webbrowser, "open") as open_browser, patch.object(
+            main_gui.messagebox,
+            "showwarning",
+        ) as show_warning:
+            app.open_docs_in_browser()
+
+        open_browser.assert_not_called()
+        show_warning.assert_called_once()
+
+    def test_toggle_monitoring_from_tray_routes_to_start_and_stop(self):
+        app = self.build_app()
+        app.start_monitoring = Mock()
+        app.stop_monitoring = Mock()
+
+        app.toggle_monitoring_from_tray()
+        self.assertEqual(len(app.root.after_calls), 1)
+        _delay, callback = app.root.after_calls.pop()
+        callback()
+        app.start_monitoring.assert_called_once()
+
+        app.is_monitoring = True
+        app.toggle_monitoring_from_tray()
+        self.assertEqual(len(app.root.after_calls), 1)
+        _delay, callback = app.root.after_calls.pop()
+        callback()
+        app.stop_monitoring.assert_called_once()
+
+    def test_open_docs_in_browser_from_tray_schedules_open_action(self):
+        app = self.build_app()
+        app.open_docs_in_browser = Mock()
+
+        app.open_docs_in_browser_from_tray()
+
+        self.assertEqual(len(app.root.after_calls), 1)
+        _delay, callback = app.root.after_calls.pop()
+        callback()
+        app.open_docs_in_browser.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import logging
 import webbrowser
 from datetime import datetime
 from collections import deque
+from urllib.parse import urlparse
 import psutil  # 메모리 사용량 모니터링용
 import shutil
 from pathlib import Path
@@ -171,13 +172,62 @@ FAILURE_NOTIFICATION_DEBOUNCE_SECONDS = 2.0
 RECENT_RESULT_CARD_LIMIT = 3
 ACTIVITY_RESULT_TAB = "최근 추출 결과"
 ACTIVITY_LOG_TAB = "작업 로그"
+GOOGLE_DOC_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{20,}$")
 
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
-    """ Google Docs URL에서 ID 추출 """
-    if not url_or_id or not isinstance(url_or_id, str): return url_or_id
-    match_docs = re.search(r'/document/d/([a-zA-Z0-9-_]+)', url_or_id)
-    return match_docs.group(1) if match_docs else url_or_id
+    """엄격한 규칙으로 Google Docs URL 또는 문서 ID를 파싱한다."""
+    if not url_or_id or not isinstance(url_or_id, str):
+        return None
+
+    candidate = url_or_id.strip()
+    if not candidate:
+        return None
+
+    if GOOGLE_DOC_ID_PATTERN.fullmatch(candidate):
+        return candidate
+
+    normalized_candidate = candidate
+    if "://" not in normalized_candidate and normalized_candidate.lower().startswith("docs.google.com/"):
+        normalized_candidate = f"https://{normalized_candidate}"
+
+    try:
+        parsed = urlparse(normalized_candidate)
+    except ValueError:
+        return None
+
+    if parsed.scheme and parsed.scheme not in ("http", "https"):
+        return None
+
+    if parsed.netloc.lower() not in {"docs.google.com", "www.docs.google.com"}:
+        return None
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) < 3 or path_parts[0] != "document" or path_parts[1] != "d":
+        return None
+
+    docs_id = path_parts[2].strip()
+    if not GOOGLE_DOC_ID_PATTERN.fullmatch(docs_id):
+        return None
+
+    return docs_id
+
+
+def validate_regex_pattern_input(use_regex_filter, regex_pattern):
+    """정규식 필터 설정의 유효성을 검사하고 오류 메시지를 반환한다."""
+    if not use_regex_filter:
+        return None
+
+    normalized_pattern = (regex_pattern or "").strip()
+    if not normalized_pattern:
+        return "정규식 필터를 사용할 때는 패턴을 입력해주세요."
+
+    try:
+        re.compile(normalized_pattern)
+    except re.error as error:
+        return f"정규식 패턴이 올바르지 않습니다: {error}"
+
+    return None
 
 
 def format_google_modified_time(modified_time_text):
@@ -434,6 +484,8 @@ class MessengerDocsApp:
         self.autostart_hint = ctk.StringVar(value="Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
         self.update_check_status = ctk.StringVar(value=self.get_default_update_check_status())
         self.docs_input = ctk.StringVar()
+        self.docs_target_user_locked = tk.BooleanVar(value=False)
+        self.docs_target_runtime_locked = tk.BooleanVar(value=False)
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
         self.readiness_var = ctk.StringVar(value="준비도 확인 중...")
@@ -917,8 +969,11 @@ class MessengerDocsApp:
             docs_input = self.docs_input.get().strip()
             if docs_input:
                 docs_id = extract_google_id_from_url(docs_input)
-                docs_id_display = docs_id[:10] + "..." if len(docs_id) > 12 else docs_id
-                self.docs_info_var.set(f"문서: {docs_id_display}")
+                if docs_id:
+                    docs_id_display = docs_id[:10] + "..." if len(docs_id) > 12 else docs_id
+                    self.docs_info_var.set(f"문서: {docs_id_display}")
+                else:
+                    self.docs_info_var.set("문서: 형식 확인 필요")
             else:
                 self.docs_info_var.set("문서: 설정되지 않음")
 
@@ -948,6 +1003,7 @@ class MessengerDocsApp:
         """로컬에서 즉시 판별 가능한 준비 상태를 계산한다."""
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
+        regex_error = validate_regex_pattern_input(self.use_regex_filter.get(), self.regex_pattern.get())
 
         if not watch_folder:
             return {
@@ -966,6 +1022,12 @@ class MessengerDocsApp:
                 "ready": False,
                 "message": "준비 필요: Google Docs URL 또는 ID를 확인하세요.",
                 "advanced_invalid": False,
+            }
+        if regex_error:
+            return {
+                "ready": False,
+                "message": f"준비 필요: {regex_error}",
+                "advanced_invalid": True,
             }
 
         try:
@@ -1240,18 +1302,47 @@ class MessengerDocsApp:
     def refresh_docs_target_ui(self):
         """문서 대상 고정 상태에 따라 입력/선택 UI를 갱신한다."""
         docs_input_val = self.docs_input.get().strip()
-        locked = bool(self.docs_target_locked.get())
-        if locked and not docs_input_val:
-            locked = False
-            self.docs_target_locked.set(locked)
+        docs_id = extract_google_id_from_url(docs_input_val)
+        if not docs_id:
+            self.set_docs_target_user_locked(False)
+            self.set_docs_target_runtime_locked(False)
 
-        if locked:
-            status_text = "대상 문서가 고정되었습니다. 감시 시작 시 이 문서로 기록합니다."
+        user_locked = self.is_docs_target_user_locked()
+        runtime_locked = self.is_docs_target_runtime_locked()
+        locked = self.sync_docs_target_lock_state()
+
+        if user_locked and runtime_locked:
+            status_text = "대상 문서가 고정되었습니다. 감시 중에는 보호 잠금이 적용되고, 종료 후에는 수동 고정만 유지됩니다."
             status_color = ("#0F9D58", "#81C995")
             lock_button_text = "문서 경로 변경"
             lock_button_color = ("gray85", "gray28")
             lock_button_hover = ("gray78", "gray34")
             lock_button_text_color = ("gray20", "gray92")
+            lock_button_state = "normal"
+        elif user_locked:
+            status_text = "대상 문서가 수동으로 고정되었습니다. 감시를 멈춰도 이 고정은 유지됩니다."
+            status_color = ("#0F9D58", "#81C995")
+            lock_button_text = "문서 경로 변경"
+            lock_button_color = ("gray85", "gray28")
+            lock_button_hover = ("gray78", "gray34")
+            lock_button_text_color = ("gray20", "gray92")
+            lock_button_state = "normal"
+        elif runtime_locked:
+            status_text = "감시 중 대상 문서가 자동으로 잠겨 있습니다. 감시가 끝나면 자동 잠금만 해제됩니다."
+            status_color = ("#0F9D58", "#81C995")
+            lock_button_text = "문서 경로 변경"
+            lock_button_color = ("gray85", "gray28")
+            lock_button_hover = ("gray78", "gray34")
+            lock_button_text_color = ("gray20", "gray92")
+            lock_button_state = "normal"
+        elif docs_input_val and not docs_id:
+            status_text = "문서 형식을 확인하세요. 올바른 Google Docs URL 또는 ID만 사용할 수 있습니다."
+            status_color = ("#B42318", "#FDA29B")
+            lock_button_text = "문서 형식 오류"
+            lock_button_color = ("gray85", "gray28")
+            lock_button_hover = ("gray78", "gray34")
+            lock_button_text_color = ("gray20", "gray92")
+            lock_button_state = "disabled"
         elif docs_input_val:
             status_text = "문서가 입력되어 있습니다. 감시 시작 시 이 문서를 자동으로 확정합니다."
             status_color = ("#1A73E8", "#8AB4F8")
@@ -1259,6 +1350,7 @@ class MessengerDocsApp:
             lock_button_color = "#1A73E8"
             lock_button_hover = "#1765CC"
             lock_button_text_color = None
+            lock_button_state = "normal"
         else:
             status_text = "문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다."
             status_color = ("gray40", "gray70")
@@ -1266,6 +1358,7 @@ class MessengerDocsApp:
             lock_button_color = "#1A73E8"
             lock_button_hover = "#1765CC"
             lock_button_text_color = None
+            lock_button_state = "disabled"
 
         self.docs_target_status_var.set(status_text)
 
@@ -1277,6 +1370,7 @@ class MessengerDocsApp:
                 "text": lock_button_text,
                 "fg_color": lock_button_color,
                 "hover_color": lock_button_hover,
+                "state": lock_button_state,
             }
             if lock_button_text_color is not None:
                 configure_kwargs["text_color"] = lock_button_text_color
@@ -1293,22 +1387,65 @@ class MessengerDocsApp:
             if hasattr(self, widget_name):
                 getattr(self, widget_name).configure(state=selection_state)
 
+    def is_docs_target_user_locked(self):
+        """사용자 수동 고정 상태를 반환한다."""
+        var = getattr(self, "docs_target_user_locked", None)
+        if hasattr(var, "get"):
+            return bool(var.get())
+        legacy_var = getattr(self, "docs_target_locked", None)
+        return bool(legacy_var.get()) if hasattr(legacy_var, "get") else False
+
+    def is_docs_target_runtime_locked(self):
+        """감시 중 자동 잠금 상태를 반환한다."""
+        var = getattr(self, "docs_target_runtime_locked", None)
+        return bool(var.get()) if hasattr(var, "get") else False
+
+    def sync_docs_target_lock_state(self):
+        """분리된 잠금 상태를 합쳐 UI용 파생 상태를 동기화한다."""
+        locked = self.is_docs_target_user_locked() or self.is_docs_target_runtime_locked()
+        legacy_var = getattr(self, "docs_target_locked", None)
+        if hasattr(legacy_var, "set"):
+            legacy_var.set(locked)
+        return locked
+
+    def set_docs_target_user_locked(self, locked):
+        """수동 고정 상태를 갱신한다."""
+        var = getattr(self, "docs_target_user_locked", None)
+        if hasattr(var, "set"):
+            var.set(bool(locked))
+        self.sync_docs_target_lock_state()
+
+    def set_docs_target_runtime_locked(self, locked):
+        """감시 중 자동 잠금 상태를 갱신한다."""
+        var = getattr(self, "docs_target_runtime_locked", None)
+        if hasattr(var, "set"):
+            var.set(bool(locked))
+        self.sync_docs_target_lock_state()
+
     def lock_docs_target(self, source_label="직접 입력"):
         """현재 입력된 문서를 대상 문서로 고정한다."""
         docs_input_val = self.docs_input.get().strip()
         if not docs_input_val:
             messagebox.showwarning("문서 경로 미지정", "먼저 문서 주소 또는 문서 ID를 입력해주세요.", parent=self.root)
             return False
+        if not extract_google_id_from_url(docs_input_val):
+            messagebox.showwarning(
+                "문서 형식 오류",
+                "올바른 Google Docs URL 또는 문서 ID를 입력한 뒤 다시 시도해주세요.",
+                parent=self.root,
+            )
+            return False
 
-        self.docs_target_locked.set(True)
+        self.set_docs_target_user_locked(True)
         self.refresh_docs_target_ui()
         self.log(f"대상 문서 경로 고정됨: {source_label}")
         return True
 
     def unlock_docs_target(self, focus_entry=False):
         """대상 문서 고정을 해제하고 수정 모드로 전환한다."""
-        was_locked = self.docs_target_locked.get()
-        self.docs_target_locked.set(False)
+        was_locked = self.sync_docs_target_lock_state()
+        self.set_docs_target_user_locked(False)
+        self.set_docs_target_runtime_locked(False)
         self.refresh_docs_target_ui()
         if was_locked:
             self.log("대상 문서 경로 고정 해제됨. 문서 변경 가능.")
@@ -1321,7 +1458,7 @@ class MessengerDocsApp:
 
     def toggle_docs_target_lock(self):
         """대상 문서 경로의 고정/수정 상태를 전환한다."""
-        if self.docs_target_locked.get():
+        if self.sync_docs_target_lock_state():
             self.unlock_docs_target(focus_entry=True)
             return
 
@@ -1378,6 +1515,10 @@ class MessengerDocsApp:
             docs_id = extract_google_id_from_url(docs_input_val)
             if not docs_id:
                 errors.append("유효한 Google Docs URL 또는 ID를 입력해주세요.")
+
+        regex_error = validate_regex_pattern_input(self.use_regex_filter.get(), self.regex_pattern.get())
+        if regex_error:
+            errors.append(regex_error)
 
         try:
             self.parse_max_cache_size()
@@ -1447,6 +1588,92 @@ class MessengerDocsApp:
             self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
             messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
 
+    def build_filter_settings_snapshot(self):
+        """현재 필터 설정 상태를 편집 가능한 스냅샷으로 반환한다."""
+        return {
+            "file_extensions": self.file_extensions.get(),
+            "use_regex_filter": self.use_regex_filter.get(),
+            "regex_pattern": self.regex_pattern.get(),
+        }
+
+    def apply_filter_settings_snapshot(self, snapshot):
+        """필터 설정 스냅샷을 실제 UI 상태에 반영한다."""
+        self.file_extensions.set(snapshot.get("file_extensions", ""))
+        self.use_regex_filter.set(bool(snapshot.get("use_regex_filter", False)))
+        self.regex_pattern.set(snapshot.get("regex_pattern", ""))
+        self.on_setting_changed()
+
+    def validate_current_regex_filter(self):
+        """현재 필터 설정의 정규식 유효성을 검사한다."""
+        return validate_regex_pattern_input(self.use_regex_filter.get(), self.regex_pattern.get())
+
+    def validate_filter_settings_snapshot(self, snapshot):
+        """필터 설정 스냅샷의 정규식 유효성을 검사한다."""
+        return validate_regex_pattern_input(
+            bool(snapshot.get("use_regex_filter", False)),
+            snapshot.get("regex_pattern", ""),
+        )
+
+    def normalize_filter_settings_snapshot(self, snapshot):
+        """필터 설정 스냅샷을 저장 가능한 값으로 정규화한다."""
+        return {
+            "file_extensions": (snapshot.get("file_extensions", "") or "").strip(),
+            "use_regex_filter": bool(snapshot.get("use_regex_filter", False)),
+            "regex_pattern": (snapshot.get("regex_pattern", "") or "").strip(),
+        }
+
+    def evaluate_filter_settings_snapshot(self, snapshot, filename):
+        """필터 스냅샷이 파일명에 매칭되는지 검사하고 결과 문구를 반환한다."""
+        normalized_filename = (filename or "").strip()
+        if not normalized_filename:
+            return {"error": None, "message": "파일 이름을 입력하세요", "matches": False}
+
+        normalized_snapshot = self.normalize_filter_settings_snapshot(snapshot)
+        regex_error = self.validate_filter_settings_snapshot(normalized_snapshot)
+        if regex_error:
+            return {"error": regex_error, "message": "정규식 패턴 오류", "matches": False}
+
+        extensions = [ext.strip() for ext in normalized_snapshot["file_extensions"].split(",") if ext.strip()]
+        ext_match = any(normalized_filename.lower().endswith(ext.lower()) for ext in extensions) if extensions else True
+
+        regex_match = True
+        if normalized_snapshot["use_regex_filter"] and normalized_snapshot["regex_pattern"]:
+            pattern = re.compile(normalized_snapshot["regex_pattern"])
+            regex_match = bool(pattern.search(normalized_filename))
+
+        matches = ext_match and regex_match
+        return {
+            "error": None,
+            "message": "매칭됨: 이 파일은 감시 대상입니다" if matches else "매칭 안됨: 이 파일은 무시됩니다",
+            "matches": matches,
+        }
+
+    def apply_filter_settings_snapshot_if_valid(
+        self,
+        snapshot,
+        *,
+        filter_error_var=None,
+        test_result_var=None,
+        close_callback=None,
+    ):
+        """유효한 경우에만 필터 설정 스냅샷을 적용한다."""
+        normalized_snapshot = self.normalize_filter_settings_snapshot(snapshot)
+        regex_error = self.validate_filter_settings_snapshot(normalized_snapshot)
+        if regex_error:
+            if filter_error_var is not None:
+                filter_error_var.set(regex_error)
+            if test_result_var is not None:
+                test_result_var.set("정규식 패턴 오류")
+            return False
+
+        if filter_error_var is not None:
+            filter_error_var.set("")
+        self.apply_filter_settings_snapshot(normalized_snapshot)
+        self.log("고급 파일 필터 설정 적용됨.")
+        if close_callback:
+            close_callback()
+        return True
+
     def focus_existing_docs_input(self):
         """기존 Google Docs URL/ID를 직접 입력할 수 있도록 입력칸에 포커스를 준다."""
         self.unlock_docs_target(focus_entry=True)
@@ -1473,6 +1700,22 @@ class MessengerDocsApp:
 
     def begin_google_service_request(self, purpose, require_drive, on_success):
         """비대화형 확인 후 필요 시 foreground 재인증으로 이어지는 공통 진입점."""
+        self.begin_google_service_request_with_options(
+            purpose=purpose,
+            require_drive=require_drive,
+            on_success=on_success,
+        )
+
+    def begin_google_service_request_with_options(
+        self,
+        *,
+        purpose,
+        require_drive,
+        on_success,
+        force_interactive=False,
+        quarantine_before_interactive=False,
+    ):
+        """Google 서비스 준비 흐름을 옵션과 함께 시작한다."""
         if not get_google_services:
             self.log("오류: Google 인증 모듈을 불러오지 못했습니다.")
             if hasattr(self, "google_connection_status_var"):
@@ -1486,16 +1729,24 @@ class MessengerDocsApp:
             messagebox.showinfo("Google 연결 진행 중", "이미 Google 연결 또는 재인증 작업이 진행 중입니다.", parent=self.root)
             return
 
+        if force_interactive and quarantine_before_interactive and quarantine_token_file:
+            quarantined_path = quarantine_token_file(self.log, reason_code="manual_reauth")
+            if quarantined_path:
+                self.log(f"수동 재연결을 위해 기존 토큰을 격리했습니다: {quarantined_path}")
+
         self.google_auth_operation_in_progress = True
         if hasattr(self, "google_connection_status_var"):
-            self.google_connection_status_var.set("연결 확인 중")
-        self.update_status("Google 연결 확인 중...", self.describe_google_request_purpose(purpose))
+            self.google_connection_status_var.set("브라우저에서 승인 대기 중" if force_interactive else "연결 확인 중")
+        self.update_status(
+            "브라우저에서 승인 대기 중..." if force_interactive else "Google 연결 확인 중...",
+            self.describe_google_request_purpose(purpose),
+        )
         self.update_monitoring_action_ui()
         self._start_google_service_worker(
             purpose=purpose,
             require_drive=require_drive,
             on_success=on_success,
-            interactive=False,
+            interactive=force_interactive,
         )
 
     def _start_google_service_worker(self, purpose, require_drive, on_success, interactive):
@@ -1662,10 +1913,12 @@ class MessengerDocsApp:
             messagebox.showerror("모듈 오류", "Google 재인증 기능을 불러오지 못했습니다.", parent=self.root)
             return
 
-        self.begin_google_service_request(
+        self.begin_google_service_request_with_options(
             purpose="manual_reauth",
             require_drive=False,
             on_success=self._finish_manual_google_reauthentication,
+            force_interactive=True,
+            quarantine_before_interactive=True,
         )
 
     def _finish_manual_google_reauthentication(self, services):
@@ -2809,6 +3062,14 @@ class MessengerDocsApp:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.root.after(100, self.process_result_queue)
     def save_config(self):
+        regex_error = self.validate_current_regex_filter()
+        if regex_error:
+            self.advanced_settings_expanded = True
+            self.update_readiness_ui()
+            self.update_status("준비", "정규식 오류")
+            messagebox.showerror("저장 오류", regex_error, parent=self.root)
+            return
+
         if not save_app_config:
             messagebox.showerror("저장 오류", "설정 저장 모듈을 불러오지 못했습니다.", parent=self.root)
             return
@@ -2851,7 +3112,8 @@ class MessengerDocsApp:
         self.check_updates_on_startup.set(normalized_config.get("check_updates_on_startup", True))
         self.watch_folder.set(normalized_config.get("watch_folder", ""))
         self.docs_input.set(normalized_config.get("docs_input", ""))
-        self.docs_target_locked.set(False)
+        self.set_docs_target_user_locked(False)
+        self.set_docs_target_runtime_locked(False)
         self.show_help_on_startup.set(normalized_config.get("show_help_on_startup", True))
         self.show_success_notifications.set(normalized_config.get("show_success_notifications", True))
         self.play_event_sounds.set(normalized_config.get("play_event_sounds", True))
@@ -2935,14 +3197,25 @@ class MessengerDocsApp:
         )
 
     def _start_monitoring_with_services(self, google_services):
-        if not self.docs_target_locked.get():
-            self.docs_target_locked.set(True)
+        had_manual_lock = self.is_docs_target_user_locked()
+        if not self.is_docs_target_runtime_locked():
+            self.set_docs_target_runtime_locked(True)
             self.refresh_docs_target_ui()
-            self.log("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
+            if not had_manual_lock:
+                self.log("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
         
         watch_folder = self.watch_folder.get().strip()
         docs_input_val = self.docs_input.get().strip()
         docs_id = extract_google_id_from_url(docs_input_val)
+        if not docs_id:
+            self.set_docs_target_runtime_locked(False)
+            self.refresh_docs_target_ui()
+            self.is_monitoring = False
+            self.google_auth_operation_in_progress = False
+            self.update_monitoring_action_ui()
+            self.update_status("준비", "문서 입력 오류")
+            messagebox.showerror("입력 오류", "유효한 Google Docs URL 또는 ID를 확인한 뒤 다시 시도해주세요.", parent=self.root)
+            return
         max_cache_size = self.parse_max_cache_size()
         
         self.log(f"처리할 Docs ID: {docs_id}")
@@ -2997,9 +3270,10 @@ class MessengerDocsApp:
     def on_monitoring_stopped(self):
         self.is_monitoring = False
         self.monitoring_thread = None
-        was_docs_locked = self.docs_target_locked.get() if hasattr(self, "docs_target_locked") else False
-        if was_docs_locked:
-            self.docs_target_locked.set(False)
+        was_runtime_locked = self.is_docs_target_runtime_locked()
+        was_user_locked = self.is_docs_target_user_locked()
+        if was_runtime_locked:
+            self.set_docs_target_runtime_locked(False)
         if hasattr(self, 'root') and self.root.winfo_exists():
             try:
                 self.enable_settings_widgets()
@@ -3008,8 +3282,10 @@ class MessengerDocsApp:
                 self.current_processing_filename = None
                 self.pending_docs_update_line_count = None
                 self.update_runtime_summary_ui()
-                if was_docs_locked:
-                    self.log("감시 중지로 대상 문서 고정이 해제되었습니다.")
+                if was_runtime_locked and was_user_locked:
+                    self.log("감시 중 자동 잠금이 해제되었고 수동 고정은 유지됩니다.")
+                elif was_runtime_locked:
+                    self.log("감시 중 자동 잠금이 해제되었습니다.")
                 self.update_status("준비")
                 self.log("감시 중지됨.")
             except Exception:
@@ -3574,7 +3850,12 @@ class MessengerDocsApp:
         filter_window.minsize(650, 450)
         filter_window.transient(self.root)  # 부모 창 위에 표시
         filter_window.grab_set()  # 모달 창으로 설정
-        
+        filter_settings = self.build_filter_settings_snapshot()
+        temp_file_extensions = ctk.StringVar(value=filter_settings["file_extensions"])
+        temp_use_regex_filter = tk.BooleanVar(value=filter_settings["use_regex_filter"])
+        temp_regex_pattern = ctk.StringVar(value=filter_settings["regex_pattern"])
+        filter_error_var = ctk.StringVar(value="")
+
         # 메인 프레임
         main_frame = ctk.CTkFrame(filter_window)
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -3594,7 +3875,7 @@ class MessengerDocsApp:
             text="감시할 파일 확장자를 쉼표로 구분하여 입력하세요.\n예: .txt,.log,.md"
         ).pack(anchor="w", pady=(0, 5))
         
-        ext_entry = ctk.CTkEntry(ext_frame, textvariable=self.file_extensions)
+        ext_entry = ctk.CTkEntry(ext_frame, textvariable=temp_file_extensions)
         ext_entry.pack(fill="x", pady=5)
         
         # 미리 정의된 확장자 선택 버튼들
@@ -3602,14 +3883,14 @@ class MessengerDocsApp:
         preset_frame.pack(fill="x", pady=5)
         
         def add_extension(ext):
-            current = self.file_extensions.get().strip()
+            current = temp_file_extensions.get().strip()
             if not current:
-                self.file_extensions.set(ext)
+                temp_file_extensions.set(ext)
             else:
                 exts = [e.strip() for e in current.split(",")]
                 if ext not in exts:
                     exts.append(ext)
-                    self.file_extensions.set(",".join(exts))
+                    temp_file_extensions.set(",".join(exts))
         
         ctk.CTkButton(
             preset_frame, 
@@ -3655,7 +3936,7 @@ class MessengerDocsApp:
         regex_check = ctk.CTkCheckBox(
             regex_header,
             text="정규식 필터 사용",
-            variable=self.use_regex_filter,
+            variable=temp_use_regex_filter,
             onvalue=True,
             offvalue=False
         )
@@ -3666,8 +3947,15 @@ class MessengerDocsApp:
             text="파일 이름에 적용할 정규식 패턴을 입력하세요.\n예: ^log_\\d{8}\\.txt$ (log_날짜8자리.txt 형식 파일만 매칭)"
         ).pack(anchor="w", pady=(0, 5))
         
-        regex_entry = ctk.CTkEntry(regex_frame, textvariable=self.regex_pattern)
+        regex_entry = ctk.CTkEntry(regex_frame, textvariable=temp_regex_pattern)
         regex_entry.pack(fill="x", pady=5)
+
+        regex_error_label = ctk.CTkLabel(
+            regex_frame,
+            textvariable=filter_error_var,
+            text_color=("#B42318", "#FDA29B"),
+        )
+        regex_error_label.pack(anchor="w", pady=(0, 5))
         
         # 테스트 섹션
         test_frame = ctk.CTkFrame(main_frame)
@@ -3691,31 +3979,30 @@ class MessengerDocsApp:
         test_result_var = ctk.StringVar(value="")
         
         def test_filter():
-            filename = test_filename_var.get().strip()
-            if not filename:
-                test_result_var.set("파일 이름을 입력하세요")
-                return
-                
-            # 확장자 필터 테스트
-            extensions = [ext.strip() for ext in self.file_extensions.get().split(",") if ext.strip()]
-            ext_match = any(filename.lower().endswith(ext.lower()) for ext in extensions) if extensions else True
-            
-            # 정규식 필터 테스트
-            regex_match = True
-            if self.use_regex_filter.get() and self.regex_pattern.get().strip():
-                try:
-                    import re
-                    pattern = re.compile(self.regex_pattern.get())
-                    regex_match = bool(pattern.search(filename))
-                except re.error:
-                    test_result_var.set("정규식 패턴 오류!")
-                    return
-            
-            # 최종 결과
-            if ext_match and regex_match:
-                test_result_var.set("✅ 매칭됨: 이 파일은 감시 대상입니다")
-            else:
-                test_result_var.set("❌ 매칭 안됨: 이 파일은 무시됩니다")
+            filter_error_var.set("")
+            evaluation = self.evaluate_filter_settings_snapshot(
+                {
+                "file_extensions": temp_file_extensions.get(),
+                "use_regex_filter": temp_use_regex_filter.get(),
+                "regex_pattern": temp_regex_pattern.get(),
+                },
+                test_filename_var.get(),
+            )
+            if evaluation["error"]:
+                filter_error_var.set(evaluation["error"])
+            test_result_var.set(evaluation["message"])
+
+        def apply_filter_settings():
+            self.apply_filter_settings_snapshot_if_valid(
+                {
+                "file_extensions": temp_file_extensions.get().strip(),
+                "use_regex_filter": temp_use_regex_filter.get(),
+                "regex_pattern": temp_regex_pattern.get().strip(),
+                },
+                filter_error_var=filter_error_var,
+                test_result_var=test_result_var,
+                close_callback=filter_window.destroy,
+            )
         
         ctk.CTkButton(
             test_input_frame,
@@ -3735,14 +4022,24 @@ class MessengerDocsApp:
         button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         button_frame.pack(fill="x", pady=(15, 0))
         
-        # 확인 버튼
-        ok_button = ctk.CTkButton(
+        cancel_button = ctk.CTkButton(
             button_frame,
-            text="확인",
+            text="취소",
             command=filter_window.destroy,
+            width=100,
+            fg_color=("gray85", "gray28"),
+            hover_color=("gray78", "gray34"),
+            text_color=("gray20", "gray92"),
+        )
+        cancel_button.pack(side="right", padx=(0, 8))
+
+        apply_button = ctk.CTkButton(
+            button_frame,
+            text="적용",
+            command=apply_filter_settings,
             width=100
         )
-        ok_button.pack(side="right")
+        apply_button.pack(side="right")
         
         # 창 중앙 배치
         filter_window.update_idletasks()
