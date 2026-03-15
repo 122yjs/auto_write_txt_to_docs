@@ -96,6 +96,13 @@ class MainGuiTestBase(unittest.TestCase):
         app.update_check_status = FakeVar("")
         app.docs_input = FakeVar("")
         app.docs_target_locked = FakeVar(False)
+        app.readiness_var = FakeVar("")
+        app.google_connection_status_var = FakeVar("")
+        app.save_state_var = FakeVar("저장됨")
+        app.current_activity_var = FakeVar("")
+        app.last_success_var = FakeVar("")
+        app.last_result_var = FakeVar("")
+        app.advanced_settings_toggle_text = FakeVar("고급 설정 펼치기")
         app.show_help_on_startup = FakeVar(True)
         app.show_success_notifications = FakeVar(True)
         app.play_event_sounds = FakeVar(True)
@@ -112,6 +119,14 @@ class MainGuiTestBase(unittest.TestCase):
         app.monitoring_thread = None
         app.latest_release_info = None
         app._update_check_in_progress = False
+        app.last_result_summary = "아직 없음"
+        app.last_success_timestamp = None
+        app.readiness_state = {"ready": False, "message": "", "advanced_invalid": False}
+        app.pending_activity_counts = {
+            main_gui.ACTIVITY_RESULT_TAB: 0,
+            main_gui.ACTIVITY_LOG_TAB: 0,
+        }
+        app.current_activity_tab = main_gui.ACTIVITY_RESULT_TAB
 
         app.watch_folder_entry = FakeEntry()
         app.watch_folder_browse_button = FakeButton("폴더 선택")
@@ -248,12 +263,17 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
 
     def test_on_monitoring_stopped_unlocks_document_controls(self):
         app = self.build_app()
+        app.watch_folder.set("C:/watch")
         app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
         app.docs_target_locked.set(True)
         app.is_monitoring = True
         app.monitoring_thread = object()
 
-        with patch.object(main_gui, "ctk", self.fake_ctk):
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(
+            main_gui.os.path,
+            "exists",
+            return_value=True,
+        ), patch.object(main_gui.os.path, "isdir", return_value=True):
             app.refresh_docs_target_ui()
             app.on_monitoring_stopped()
 
@@ -271,6 +291,24 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         app.update_windows_startup_ui_state.assert_called_once()
         app.log.assert_any_call("감시 중지로 대상 문서 고정이 해제되었습니다.")
         app.log.assert_any_call("감시 중지됨.")
+
+    def test_update_readiness_ui_disables_start_button_until_required_inputs_exist(self):
+        app = self.build_app()
+
+        with patch.object(main_gui, "ctk", self.fake_ctk):
+            app.update_readiness_ui()
+
+        self.assertEqual(app.start_button.state, "disabled")
+        self.assertIn("감시 폴더", app.readiness_var.get())
+
+    def test_register_activity_event_auto_switches_to_log_tab_for_errors(self):
+        app = self.build_app()
+        app.activity_tabview = Mock()
+
+        app.register_activity_event(main_gui.ACTIVITY_LOG_TAB, auto_switch=True)
+
+        self.assertEqual(app.current_activity_tab, main_gui.ACTIVITY_LOG_TAB)
+        self.assertEqual(app.pending_activity_counts[main_gui.ACTIVITY_LOG_TAB], 0)
 
     def test_start_monitoring_auto_locks_document_before_background_run(self):
         app = self.build_app()
