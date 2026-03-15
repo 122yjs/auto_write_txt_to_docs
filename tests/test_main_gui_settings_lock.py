@@ -117,6 +117,8 @@ class MainGuiTestBase(unittest.TestCase):
         app.watch_folder = FakeVar("")
         app.update_check_status = FakeVar("")
         app.docs_input = FakeVar("")
+        app.docs_target_user_locked = FakeVar(False)
+        app.docs_target_runtime_locked = FakeVar(False)
         app.docs_target_locked = FakeVar(False)
         app.readiness_var = FakeVar("")
         app.google_connection_status_var = FakeVar("")
@@ -227,18 +229,48 @@ class MainGuiSettingsLockTests(MainGuiTestBase):
         app.update_windows_startup_ui_state.assert_called_once()
 
 
+class MainGuiHelperFunctionTests(unittest.TestCase):
+    def test_extract_google_id_from_url_accepts_valid_id_and_docs_url(self):
+        self.assertEqual(
+            main_gui.extract_google_id_from_url("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit"),
+            "EXAMPLE_DOC_ID_12345",
+        )
+        self.assertEqual(
+            main_gui.extract_google_id_from_url("EXAMPLE_DOC_ID_12345"),
+            "EXAMPLE_DOC_ID_12345",
+        )
+
+    def test_extract_google_id_from_url_rejects_invalid_input(self):
+        self.assertIsNone(main_gui.extract_google_id_from_url(""))
+        self.assertIsNone(main_gui.extract_google_id_from_url("https://example.com/document/d/EXAMPLE_DOC_ID_12345/edit"))
+        self.assertIsNone(main_gui.extract_google_id_from_url("not-a-valid-doc-id"))
+
+    def test_validate_regex_pattern_input_rejects_empty_or_invalid_pattern_when_enabled(self):
+        self.assertEqual(
+            main_gui.validate_regex_pattern_input(True, ""),
+            "정규식 필터를 사용할 때는 패턴을 입력해주세요.",
+        )
+        self.assertIn(
+            "정규식 패턴이 올바르지 않습니다",
+            main_gui.validate_regex_pattern_input(True, "[unclosed"),
+        )
+        self.assertIsNone(main_gui.validate_regex_pattern_input(False, "[unclosed"))
+
+
 class MainGuiDocsTargetTests(MainGuiTestBase):
     def test_apply_config_data_keeps_saved_document_editable(self):
         app = self.build_app()
         config_data = {
             "watch_folder": "C:/watch",
-            "docs_input": "https://docs.google.com/document/d/EXAMPLE_ID/edit",
+            "docs_input": "https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit",
             "appearance_mode": "Light",
         }
 
         with patch.object(main_gui, "ctk", self.fake_ctk):
             app.apply_config_data(config_data)
 
+        self.assertFalse(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
         self.assertFalse(app.docs_target_locked.get())
         self.assertEqual(app.docs_input_entry.state, "normal")
         self.assertEqual(app.create_doc_button.state, "normal")
@@ -253,7 +285,7 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
     def test_validate_inputs_accepts_editable_document_without_manual_lock(self):
         app = self.build_app()
         app.watch_folder.set("C:/watch")
-        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
         app.parse_max_cache_size = Mock(return_value=10000)
 
         with patch.object(main_gui.os.path, "exists", return_value=True), patch.object(
@@ -265,12 +297,64 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
 
         self.assertEqual(errors, [])
 
+    def test_validate_inputs_rejects_invalid_document_url(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://example.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.parse_max_cache_size = Mock(return_value=10000)
+
+        with patch.object(main_gui.os.path, "exists", return_value=True), patch.object(
+            main_gui.os.path,
+            "isdir",
+            return_value=True,
+        ):
+            errors = app.validate_inputs()
+
+        self.assertIn("유효한 Google Docs URL 또는 ID를 입력해주세요.", errors)
+
+    def test_validate_inputs_rejects_invalid_regex_pattern(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.use_regex_filter.set(True)
+        app.regex_pattern.set("[unclosed")
+        app.parse_max_cache_size = Mock(return_value=10000)
+
+        with patch.object(main_gui.os.path, "exists", return_value=True), patch.object(
+            main_gui.os.path,
+            "isdir",
+            return_value=True,
+        ):
+            errors = app.validate_inputs()
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("정규식 패턴이 올바르지 않습니다", errors[0])
+
+    def test_update_readiness_ui_disables_start_button_for_invalid_document_url(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://example.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.parse_max_cache_size = Mock(return_value=10000)
+
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(
+            main_gui.os.path,
+            "exists",
+            return_value=True,
+        ), patch.object(main_gui.os.path, "isdir", return_value=True):
+            app.update_readiness_ui()
+
+        self.assertFalse(app.readiness_state["ready"])
+        self.assertEqual(app.start_button.state, "disabled")
+        self.assertIn("Google Docs URL", app.readiness_var.get())
+
     def test_lock_and_focus_existing_docs_input_restore_editable_state(self):
         app = self.build_app()
-        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
 
         with patch.object(main_gui, "ctk", self.fake_ctk):
             self.assertTrue(app.lock_docs_target(source_label="직접 입력"))
+            self.assertTrue(app.docs_target_user_locked.get())
+            self.assertFalse(app.docs_target_runtime_locked.get())
             self.assertTrue(app.docs_target_locked.get())
             self.assertEqual(app.docs_input_entry.state, "disabled")
             self.assertEqual(app.create_doc_button.state, "disabled")
@@ -279,6 +363,8 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
 
             app.focus_existing_docs_input()
 
+        self.assertFalse(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
         self.assertFalse(app.docs_target_locked.get())
         self.assertEqual(app.docs_input_entry.state, "normal")
         self.assertEqual(app.create_doc_button.state, "normal")
@@ -289,11 +375,23 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         app.log.assert_any_call("대상 문서 경로 고정됨: 직접 입력")
         app.log.assert_any_call("기존 Google Docs 주소/ID 직접 입력 모드.")
 
-    def test_on_monitoring_stopped_unlocks_document_controls(self):
+    def test_lock_docs_target_rejects_invalid_document_input(self):
+        app = self.build_app()
+        app.docs_input.set("https://example.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+
+        with patch.object(main_gui.messagebox, "showwarning") as show_warning:
+            locked = app.lock_docs_target(source_label="직접 입력")
+
+        self.assertFalse(locked)
+        self.assertFalse(app.docs_target_locked.get())
+        show_warning.assert_called_once()
+
+    def test_on_monitoring_stopped_unlocks_runtime_document_controls(self):
         app = self.build_app()
         app.watch_folder.set("C:/watch")
-        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
-        app.docs_target_locked.set(True)
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.docs_target_runtime_locked.set(True)
+        app.sync_docs_target_lock_state()
         app.is_monitoring = True
         app.monitoring_thread = object()
 
@@ -305,6 +403,8 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
             app.refresh_docs_target_ui()
             app.on_monitoring_stopped()
 
+        self.assertFalse(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
         self.assertFalse(app.docs_target_locked.get())
         self.assertFalse(app.is_monitoring)
         self.assertIsNone(app.monitoring_thread)
@@ -317,8 +417,35 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         self.assertEqual(app.watch_folder_open_button.state, "normal")
         app.update_status.assert_called_once_with("준비")
         app.update_windows_startup_ui_state.assert_called_once()
-        app.log.assert_any_call("감시 중지로 대상 문서 고정이 해제되었습니다.")
+        app.log.assert_any_call("감시 중 자동 잠금이 해제되었습니다.")
         app.log.assert_any_call("감시 중지됨.")
+
+    def test_on_monitoring_stopped_keeps_manual_lock_after_runtime_unlock(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.docs_target_user_locked.set(True)
+        app.docs_target_runtime_locked.set(True)
+        app.sync_docs_target_lock_state()
+        app.is_monitoring = True
+        app.monitoring_thread = object()
+
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(
+            main_gui.os.path,
+            "exists",
+            return_value=True,
+        ), patch.object(main_gui.os.path, "isdir", return_value=True):
+            app.refresh_docs_target_ui()
+            app.on_monitoring_stopped()
+
+        self.assertTrue(app.docs_target_user_locked.get())
+        self.assertFalse(app.docs_target_runtime_locked.get())
+        self.assertTrue(app.docs_target_locked.get())
+        self.assertEqual(app.docs_input_entry.state, "disabled")
+        self.assertEqual(app.create_doc_button.state, "disabled")
+        self.assertEqual(app.manual_doc_input_button.state, "disabled")
+        self.assertEqual(app.select_doc_button.state, "disabled")
+        app.log.assert_any_call("감시 중 자동 잠금이 해제되었고 수동 고정은 유지됩니다.")
 
     def test_update_readiness_ui_disables_start_button_until_required_inputs_exist(self):
         app = self.build_app()
@@ -341,7 +468,7 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
     def test_start_monitoring_requests_google_services_before_background_run(self):
         app = self.build_app()
         app.watch_folder.set("C:/watch")
-        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
         app.settings_changed = False
         app.parse_max_cache_size = Mock(return_value=10000)
         app.begin_google_service_request = Mock()
@@ -361,7 +488,7 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
     def test_start_monitoring_with_services_auto_locks_document_before_background_run(self):
         app = self.build_app()
         app.watch_folder.set("C:/watch")
-        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
         app.settings_changed = False
         app.stop_event = Mock()
         app.parse_max_cache_size = Mock(return_value=10000)
@@ -381,6 +508,8 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         ), patch.object(main_gui.threading, "Thread", return_value=fake_thread):
             app._start_monitoring_with_services({"docs": object()})
 
+        self.assertFalse(app.docs_target_user_locked.get())
+        self.assertTrue(app.docs_target_runtime_locked.get())
         self.assertTrue(app.docs_target_locked.get())
         self.assertEqual(app.docs_input_entry.state, "disabled")
         self.assertEqual(app.create_doc_button.state, "disabled")
@@ -433,6 +562,185 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         self.assertFalse(app.google_auth_operation_in_progress)
         run_interactive_auth_mock.assert_not_called()
         on_success.assert_not_called()
+
+    def test_prompt_google_reauthentication_forces_interactive_browser_flow(self):
+        app = self.build_app()
+        app.begin_google_service_request_with_options = Mock()
+
+        with patch.object(main_gui, "run_interactive_auth", Mock()):
+            app.prompt_google_reauthentication()
+
+        app.begin_google_service_request_with_options.assert_called_once_with(
+            purpose="manual_reauth",
+            require_drive=False,
+            on_success=app._finish_manual_google_reauthentication,
+            force_interactive=True,
+            quarantine_before_interactive=True,
+        )
+
+    def test_begin_google_service_request_with_force_interactive_quarantines_token_and_starts_browser_flow(self):
+        app = self.build_app()
+        app._start_google_service_worker = Mock()
+        on_success = Mock()
+
+        with patch.object(main_gui, "quarantine_token_file", return_value="C:/cache/token.invalid.json"):
+            app.begin_google_service_request_with_options(
+                purpose="manual_reauth",
+                require_drive=False,
+                on_success=on_success,
+                force_interactive=True,
+                quarantine_before_interactive=True,
+            )
+
+        self.assertTrue(app.google_auth_operation_in_progress)
+        self.assertEqual(app.google_connection_status_var.get(), "브라우저에서 승인 대기 중")
+        app._start_google_service_worker.assert_called_once_with(
+            purpose="manual_reauth",
+            require_drive=False,
+            on_success=on_success,
+            interactive=True,
+        )
+        app.log.assert_any_call("수동 재연결을 위해 기존 토큰을 격리했습니다: C:/cache/token.invalid.json")
+
+    def test_start_google_service_worker_runs_interactive_auth_before_service_check(self):
+        app = self.build_app()
+        call_order = []
+
+        def fake_run_interactive_auth(*_args, **_kwargs):
+            call_order.append("interactive")
+
+        def fake_get_google_services(*_args, **_kwargs):
+            call_order.append("services")
+            return {"docs": object()}
+
+        with patch.object(main_gui, "run_interactive_auth", side_effect=fake_run_interactive_auth), patch.object(
+            main_gui,
+            "get_google_services",
+            side_effect=fake_get_google_services,
+        ), patch.object(main_gui.threading, "Thread", ImmediateThread):
+            app._start_google_service_worker(
+                purpose="manual_reauth",
+                require_drive=False,
+                on_success=Mock(),
+                interactive=True,
+            )
+            for _delay, callback in list(app.root.after_calls):
+                callback()
+
+        self.assertEqual(call_order, ["interactive", "services"])
+
+    def test_apply_filter_settings_snapshot_keeps_original_state_until_apply(self):
+        app = self.build_app()
+        original_snapshot = app.build_filter_settings_snapshot()
+        edited_snapshot = {
+            "file_extensions": ".txt,.log",
+            "use_regex_filter": True,
+            "regex_pattern": "^log_\\d+\\.txt$",
+        }
+
+        self.assertEqual(app.file_extensions.get(), original_snapshot["file_extensions"])
+        self.assertEqual(app.use_regex_filter.get(), original_snapshot["use_regex_filter"])
+        self.assertEqual(app.regex_pattern.get(), original_snapshot["regex_pattern"])
+
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(
+            main_gui.os.path,
+            "exists",
+            return_value=False,
+        ):
+            app.apply_filter_settings_snapshot(edited_snapshot)
+
+        self.assertEqual(app.file_extensions.get(), ".txt,.log")
+        self.assertTrue(app.use_regex_filter.get())
+        self.assertEqual(app.regex_pattern.get(), "^log_\\d+\\.txt$")
+        self.assertTrue(app.settings_changed)
+
+    def test_apply_filter_settings_snapshot_if_valid_rejects_invalid_regex_without_mutation(self):
+        app = self.build_app()
+        filter_error_var = FakeVar("")
+        test_result_var = FakeVar("")
+        close_callback = Mock()
+
+        applied = app.apply_filter_settings_snapshot_if_valid(
+            {
+                "file_extensions": ".txt",
+                "use_regex_filter": True,
+                "regex_pattern": "[unclosed",
+            },
+            filter_error_var=filter_error_var,
+            test_result_var=test_result_var,
+            close_callback=close_callback,
+        )
+
+        self.assertFalse(applied)
+        self.assertEqual(app.file_extensions.get(), ".txt")
+        self.assertFalse(app.use_regex_filter.get())
+        self.assertEqual(app.regex_pattern.get(), "")
+        self.assertIn("정규식 패턴이 올바르지 않습니다", filter_error_var.get())
+        self.assertEqual(test_result_var.get(), "정규식 패턴 오류")
+        close_callback.assert_not_called()
+
+    def test_apply_filter_settings_snapshot_if_valid_applies_snapshot_and_closes(self):
+        app = self.build_app()
+        filter_error_var = FakeVar("기존 오류")
+        test_result_var = FakeVar("")
+        close_callback = Mock()
+
+        applied = app.apply_filter_settings_snapshot_if_valid(
+            {
+                "file_extensions": " .txt,.log ",
+                "use_regex_filter": True,
+                "regex_pattern": " ^log_\\d+\\.txt$ ",
+            },
+            filter_error_var=filter_error_var,
+            test_result_var=test_result_var,
+            close_callback=close_callback,
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(app.file_extensions.get(), ".txt,.log")
+        self.assertTrue(app.use_regex_filter.get())
+        self.assertEqual(app.regex_pattern.get(), "^log_\\d+\\.txt$")
+        self.assertEqual(filter_error_var.get(), "")
+        close_callback.assert_called_once()
+
+    def test_evaluate_filter_settings_snapshot_reports_matching_result(self):
+        app = self.build_app()
+
+        matched = app.evaluate_filter_settings_snapshot(
+            {
+                "file_extensions": ".txt,.log",
+                "use_regex_filter": True,
+                "regex_pattern": "^log_\\d+\\.txt$",
+            },
+            "log_123.txt",
+        )
+        not_matched = app.evaluate_filter_settings_snapshot(
+            {
+                "file_extensions": ".txt,.log",
+                "use_regex_filter": True,
+                "regex_pattern": "^log_\\d+\\.txt$",
+            },
+            "note.md",
+        )
+
+        self.assertTrue(matched["matches"])
+        self.assertEqual(matched["message"], "매칭됨: 이 파일은 감시 대상입니다")
+        self.assertFalse(not_matched["matches"])
+        self.assertEqual(not_matched["message"], "매칭 안됨: 이 파일은 무시됩니다")
+
+    def test_save_config_blocks_invalid_regex_pattern(self):
+        app = self.build_app()
+        app.use_regex_filter.set(True)
+        app.regex_pattern.set("[unclosed")
+
+        with patch.object(main_gui, "save_app_config") as save_config, patch.object(
+            main_gui.messagebox,
+            "showerror",
+        ) as show_error:
+            app.save_config()
+
+        save_config.assert_not_called()
+        show_error.assert_called_once()
 
 
 class MainGuiAutostartTests(MainGuiTestBase):
