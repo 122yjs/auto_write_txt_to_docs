@@ -10,6 +10,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("def build_main_window_ui", self.source)
         self.assertIn("def _build_status_panel", self.source)
         self.assertIn("def _build_settings_panel", self.source)
+        self.assertIn("def _build_autostart_row", self.source)
         self.assertIn("def _build_control_panel", self.source)
         self.assertIn("def _build_activity_panel", self.source)
         self.assertIn("def _build_cta_footer", self.source)
@@ -32,6 +33,7 @@ class MainWindowUiTests(unittest.TestCase):
     def test_main_window_ui_contains_basic_and_advanced_settings(self):
         self.assertIn('text="작업 설정"', self.source)
         self.assertIn('text="고급 설정"', self.source)
+        self.assertIn('text="Windows 자동 실행"', self.source)
         self.assertIn('textvariable=state_vars["advanced_settings_toggle_text"]', self.source)
         self.assertIn("advanced_settings_frame.pack_forget()", self.source)
         self.assertIn('text="새 문서 만들기"', self.source)
@@ -43,6 +45,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn('text="작업 결과 알림 표시"', self.source)
         self.assertIn('text="작업 결과 효과음 재생"', self.source)
         self.assertIn('text="Windows 로그인 시 자동으로 실행"', self.source)
+        self.assertIn('text="필터, 캐시, 알림"', self.source)
 
     def test_main_window_ui_contains_new_status_and_readiness_bindings(self):
         self.assertIn('textvariable=state_vars["save_state_var"]', self.source)

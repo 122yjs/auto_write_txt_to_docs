@@ -392,6 +392,47 @@ def _build_basic_settings_rows(ctk, parent, state_vars, callbacks, font_family):
     }
 
 
+def _build_autostart_row(ctk, parent, state_vars, font_family):
+    """메인 설정 영역에서 Windows 자동 실행 행을 생성한다."""
+    autostart_row = ctk.CTkFrame(parent, fg_color="transparent")
+    autostart_row.pack(fill="x", padx=14, pady=(4, 4))
+    ctk.CTkLabel(
+        autostart_row,
+        text="Windows 자동 실행",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    autostart_switch = ctk.CTkSwitch(
+        autostart_row,
+        text="Windows 로그인 시 자동으로 실행",
+        variable=state_vars["launch_on_windows_startup"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    autostart_switch.pack(side="left", padx=4)
+    _attach_tooltip(
+        autostart_switch,
+        "스위치를 바꾸면 Windows 시작프로그램 폴더의 자동 실행 상태가 바로 변경됩니다.",
+    )
+
+    autostart_hint_label = ctk.CTkLabel(
+        parent,
+        textvariable=state_vars["autostart_hint"],
+        font=_font(ctk, 11, family=font_family),
+        text_color=("gray45", "gray70"),
+        anchor="w",
+        justify="left",
+    )
+    autostart_hint_label.pack(fill="x", padx=(132, 0), pady=(0, 8))
+
+    return {
+        "autostart_switch": autostart_switch,
+        "autostart_hint_label": autostart_hint_label,
+    }
+
+
 def _build_advanced_settings_rows(ctk, parent, state_vars, callbacks, font_family):
     """고급 설정 행을 생성한다."""
     validate_command = (
@@ -517,45 +558,10 @@ def _build_advanced_settings_rows(ctk, parent, state_vars, callbacks, font_famil
     )
     sound_checkbox.pack(side="left", padx=4)
 
-    autostart_row = ctk.CTkFrame(parent, fg_color="transparent")
-    autostart_row.pack(fill="x", pady=4)
-    ctk.CTkLabel(
-        autostart_row,
-        text="Windows 자동 실행",
-        width=110,
-        anchor="w",
-        font=_font(ctk, 13, "bold", family=font_family),
-    ).pack(side="left", padx=(0, 8))
-    autostart_switch = ctk.CTkSwitch(
-        autostart_row,
-        text="Windows 로그인 시 자동으로 실행",
-        variable=state_vars["launch_on_windows_startup"],
-        onvalue=True,
-        offvalue=False,
-        font=_font(ctk, 12, family=font_family),
-    )
-    autostart_switch.pack(side="left", padx=4)
-    _attach_tooltip(
-        autostart_switch,
-        "스위치를 바꾸면 Windows 시작프로그램 폴더의 자동 실행 상태가 바로 변경됩니다.",
-    )
-
-    autostart_hint_label = ctk.CTkLabel(
-        parent,
-        textvariable=state_vars["autostart_hint"],
-        font=_font(ctk, 11, family=font_family),
-        text_color=("gray45", "gray70"),
-        anchor="w",
-        justify="left",
-    )
-    autostart_hint_label.pack(fill="x", padx=(118, 0), pady=(0, 4))
-
     return {
         "max_cache_size_entry": max_cache_size_entry,
         "cache_folder_button": cache_folder_button,
         "notification_checkbox": notification_checkbox,
-        "autostart_switch": autostart_switch,
-        "autostart_hint_label": autostart_hint_label,
         "advanced_filter_button": advanced_filter_button,
     }
 
@@ -591,6 +597,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
 
     widget_refs = {"settings_frame": settings_frame}
     widget_refs.update(_build_basic_settings_rows(ctk, settings_frame, state_vars, callbacks, font_family))
+    widget_refs.update(_build_autostart_row(ctk, settings_frame, state_vars, font_family))
 
     advanced_toggle_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
     advanced_toggle_row.pack(fill="x", padx=14, pady=(10, 4))
@@ -603,7 +610,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ).pack(side="left", padx=(0, 8))
     ctk.CTkLabel(
         advanced_toggle_row,
-        text="필터, 캐시, 알림, Windows 자동 실행",
+        text="필터, 캐시, 알림",
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray70"),
     ).pack(side="left")
