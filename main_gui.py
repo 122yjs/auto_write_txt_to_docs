@@ -45,15 +45,21 @@ except ImportError:
 
 try:
     from src.auto_write_txt_to_docs.google_auth import (
+        GoogleAuthActionRequired,
         create_google_document,
         get_google_services,
         list_accessible_google_documents,
+        quarantine_token_file,
+        run_interactive_auth,
     )
 except ImportError:
     logging.error("Google 인증 모듈(google_auth.py)을 찾을 수 없습니다.")
+    GoogleAuthActionRequired = Exception
     create_google_document = None
     get_google_services = None
     list_accessible_google_documents = None
+    quarantine_token_file = None
+    run_interactive_auth = None
 
 # path_utils 임포트 (공통 경로 정책 사용)
 try:
@@ -476,6 +482,7 @@ class MessengerDocsApp:
         self.recent_failure_notifications = {}
         self.latest_release_info = None
         self._update_check_in_progress = False
+        self.google_auth_operation_in_progress = False
         
         # 상태 표시 변수
         self.status_var = ctk.StringVar(value="준비")
@@ -1047,7 +1054,8 @@ class MessengerDocsApp:
     def update_monitoring_action_ui(self):
         """감시 상태와 준비도에 따라 CTA 버튼 상태를 맞춘다."""
         readiness_ready = bool(getattr(self, "readiness_state", {}).get("ready"))
-        start_state = "disabled" if self.is_monitoring or not readiness_ready else "normal"
+        auth_in_progress = bool(getattr(self, "google_auth_operation_in_progress", False))
+        start_state = "disabled" if self.is_monitoring or not readiness_ready or auth_in_progress else "normal"
         stop_state = "normal" if self.is_monitoring else "disabled"
 
         if hasattr(self, "start_button"):
@@ -1444,6 +1452,233 @@ class MessengerDocsApp:
         self.unlock_docs_target(focus_entry=True)
         self.log("기존 Google Docs 주소/ID 직접 입력 모드.")
 
+    def describe_google_request_purpose(self, purpose):
+        purpose_map = {
+            "monitoring": "감시 시작",
+            "create_doc": "새 문서 만들기",
+            "select_doc": "문서 목록 조회",
+            "manual_reauth": "Google 계정 다시 연결",
+        }
+        return purpose_map.get(purpose, "Google 작업")
+
+    def ensure_window_visible_for_google_auth(self):
+        """재인증 안내 전에 메인 창을 전면으로 올린다."""
+        try:
+            self.show_window()
+        except Exception:
+            try:
+                self.present_main_window()
+            except Exception:
+                pass
+
+    def begin_google_service_request(self, purpose, require_drive, on_success):
+        """비대화형 확인 후 필요 시 foreground 재인증으로 이어지는 공통 진입점."""
+        if not get_google_services:
+            self.log("오류: Google 인증 모듈을 불러오지 못했습니다.")
+            if hasattr(self, "google_connection_status_var"):
+                self.google_connection_status_var.set("재인증 필요")
+            self.update_status("⚠️ 기록 불가", "Google 인증 모듈 오류", tray_status_text="오류 상태")
+            messagebox.showerror("Google 연결 오류", "Google 인증 모듈을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        if self.google_auth_operation_in_progress:
+            self.log("Google 연결 작업이 이미 진행 중입니다.")
+            messagebox.showinfo("Google 연결 진행 중", "이미 Google 연결 또는 재인증 작업이 진행 중입니다.", parent=self.root)
+            return
+
+        self.google_auth_operation_in_progress = True
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("연결 확인 중")
+        self.update_status("Google 연결 확인 중...", self.describe_google_request_purpose(purpose))
+        self.update_monitoring_action_ui()
+        self._start_google_service_worker(
+            purpose=purpose,
+            require_drive=require_drive,
+            on_success=on_success,
+            interactive=False,
+        )
+
+    def _start_google_service_worker(self, purpose, require_drive, on_success, interactive):
+        """Google 서비스 준비를 백그라운드 스레드에서 수행한다."""
+
+        def worker():
+            try:
+                if interactive:
+                    if hasattr(self, "google_connection_status_var"):
+                        self.root.after(0, lambda: self.google_connection_status_var.set("브라우저에서 승인 대기 중"))
+                    run_interactive_auth(self.log_threadsafe, timeout_seconds=180)
+
+                services = get_google_services(
+                    self.log_threadsafe,
+                    require_drive=require_drive,
+                    interactive_allowed=False,
+                )
+                if not services or "docs" not in services or (require_drive and "drive" not in services):
+                    raise RuntimeError("필수 Google 서비스 준비에 실패했습니다.")
+                self.root.after(
+                    0,
+                    lambda prepared=services, used_interactive=interactive: self._finish_google_service_request_success(
+                        purpose,
+                        prepared,
+                        on_success,
+                        used_interactive=used_interactive,
+                    ),
+                )
+            except GoogleAuthActionRequired as auth_error:
+                if interactive:
+                    self.root.after(
+                        0,
+                        lambda err=auth_error: self._finish_google_service_request_auth_failure(purpose, err),
+                    )
+                else:
+                    self.root.after(
+                        0,
+                        lambda err=auth_error: self._handle_google_auth_action_required(
+                            purpose,
+                            require_drive,
+                            on_success,
+                            err,
+                        ),
+                    )
+            except Exception as exc:
+                self.root.after(0, lambda err=exc: self._finish_google_service_request_failure(purpose, err))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_google_auth_action_required(self, purpose, require_drive, on_success, auth_error):
+        """사용자 확인이 필요한 재인증 안내를 표시한다."""
+        self.google_auth_operation_in_progress = False
+        self.update_monitoring_action_ui()
+        self.ensure_window_visible_for_google_auth()
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("재인증 필요")
+
+        purpose_label = self.describe_google_request_purpose(purpose)
+        detail_lines = [
+            f"{purpose_label} 전에 Google 계정을 다시 연결해야 합니다.",
+            "",
+            auth_error.user_message,
+        ]
+        if getattr(auth_error, "quarantined_token_path", None):
+            detail_lines.extend(["", f"격리된 기존 토큰: {auth_error.quarantined_token_path}"])
+
+        self.update_status("재인증 필요", purpose_label, tray_status_text="오류 상태")
+        should_continue = messagebox.askyesno(
+            "Google 계정 다시 연결",
+            "\n".join(detail_lines) + "\n\n지금 브라우저 인증을 시작할까요?",
+            parent=self.root,
+        )
+        if not should_continue:
+            self.log(f"{purpose_label} 전에 필요한 Google 재인증을 사용자가 취소했습니다.")
+            return
+
+        self.google_auth_operation_in_progress = True
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("브라우저에서 승인 대기 중")
+        self.update_status("브라우저에서 승인 대기 중...", purpose_label)
+        self.update_monitoring_action_ui()
+        self._start_google_service_worker(
+            purpose=purpose,
+            require_drive=require_drive,
+            on_success=on_success,
+            interactive=True,
+        )
+
+    def _finish_google_service_request_success(self, purpose, services, on_success, *, used_interactive):
+        """Google 서비스 준비 성공 후 후속 액션을 실행한다."""
+        self.google_auth_operation_in_progress = False
+        self.update_monitoring_action_ui()
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("재연결 완료" if used_interactive else "연결 확인 완료")
+        self.update_status("Google 연결 확인 완료", self.describe_google_request_purpose(purpose))
+        on_success(services)
+
+    def _finish_google_service_request_failure(self, purpose, error):
+        """예상하지 못한 Google 서비스 준비 실패를 처리한다."""
+        self.google_auth_operation_in_progress = False
+        self.update_monitoring_action_ui()
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("연결 확인 실패")
+        self.log(f"오류: {self.describe_google_request_purpose(purpose)}용 Google 서비스 준비 실패 - {error}")
+        self.update_status("⚠️ 기록 불가", "Google 연결 실패", tray_status_text="오류 상태")
+        messagebox.showerror(
+            "Google 연결 오류",
+            f"{self.describe_google_request_purpose(purpose)}에 필요한 Google 연결을 준비하지 못했습니다.\n{error}",
+            parent=self.root,
+        )
+
+    def _finish_google_service_request_auth_failure(self, purpose, auth_error):
+        """대화형 재인증 자체가 실패했을 때 상태를 복구한다."""
+        self.google_auth_operation_in_progress = False
+        self.update_monitoring_action_ui()
+        if hasattr(self, "google_connection_status_var"):
+            if auth_error.reason_code == "timeout":
+                self.google_connection_status_var.set("시간 초과")
+            else:
+                self.google_connection_status_var.set("재인증 필요")
+
+        detail_text = "브라우저 승인 시간 초과" if auth_error.reason_code == "timeout" else "Google 재인증 실패"
+        self.update_status("⚠️ 기록 불가", detail_text, tray_status_text="오류 상태")
+        self.log(f"오류: {self.describe_google_request_purpose(purpose)} 중 대화형 재인증 실패 - {auth_error.user_message}")
+        messagebox.showerror(
+            "Google 재인증 실패",
+            auth_error.user_message,
+            parent=self.root,
+        )
+
+    def reset_google_auth(self):
+        """현재 토큰을 격리해 다음 연결에서 새 인증을 사용하도록 초기화한다."""
+        if not quarantine_token_file:
+            messagebox.showerror("모듈 오류", "Google 인증 초기화 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        if not messagebox.askyesno(
+            "인증 초기화",
+            "현재 Google 토큰을 격리하고 다음 연결부터 다시 인증합니다.\n계속할까요?",
+            parent=self.root,
+        ):
+            return
+
+        quarantined_path = quarantine_token_file(self.log, reason_code="manual_reset")
+        if quarantined_path:
+            if hasattr(self, "google_connection_status_var"):
+                self.google_connection_status_var.set("재인증 필요")
+            self.update_status("준비", "Google 계정 다시 연결 필요")
+            messagebox.showinfo(
+                "인증 초기화 완료",
+                f"기존 토큰을 격리했습니다.\n{quarantined_path}\n\n다음 연결 시 Google 계정을 다시 인증하세요.",
+                parent=self.root,
+            )
+        else:
+            messagebox.showinfo(
+                "인증 초기화",
+                "격리할 기존 토큰이 없습니다. 필요하면 'Google 계정 다시 연결'을 사용하세요.",
+                parent=self.root,
+            )
+
+    def prompt_google_reauthentication(self):
+        """사용자 요청으로 Google 계정을 다시 연결한다."""
+        if not run_interactive_auth:
+            messagebox.showerror("모듈 오류", "Google 재인증 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        self.begin_google_service_request(
+            purpose="manual_reauth",
+            require_drive=False,
+            on_success=self._finish_manual_google_reauthentication,
+        )
+
+    def _finish_manual_google_reauthentication(self, services):
+        if not services or "docs" not in services:
+            messagebox.showerror("Google 연결 오류", "Google 재연결 후 Docs 서비스를 확인하지 못했습니다.", parent=self.root)
+            return
+        self.log("Google 계정 다시 연결 완료.")
+        messagebox.showinfo(
+            "Google 연결 완료",
+            "Google 계정 연결을 복구했습니다. 이제 감시 시작이나 문서 작업을 다시 시도할 수 있습니다.",
+            parent=self.root,
+        )
+
     def get_google_services_for_ui(self):
         """GUI에서 문서 생성/선택에 사용할 Google 서비스 객체를 준비한다."""
         if not get_google_services:
@@ -1451,7 +1686,16 @@ class MessengerDocsApp:
             return None
 
         self.log("Google Docs/Drive 서비스 연결 확인 중...")
-        services = get_google_services(self.log)
+        try:
+            services = get_google_services(self.log, require_drive=True, interactive_allowed=False)
+        except GoogleAuthActionRequired as auth_error:
+            self._handle_google_auth_action_required(
+                "create_doc",
+                True,
+                lambda _services: None,
+                auth_error,
+            )
+            return None
         if not services:
             messagebox.showerror(
                 "Google 연결 오류",
@@ -1486,14 +1730,21 @@ class MessengerDocsApp:
 
         self.log("감시 시작 전 Google Docs 연결 확인 중...")
         if hasattr(self, "google_connection_status_var"):
-            self.google_connection_status_var.set("Google 연결 확인 중...")
+            self.google_connection_status_var.set("연결 확인 중")
         self.update_status("Google 연결 확인 중...")
-        services = get_google_services(self.log)
+        try:
+            services = get_google_services(self.log, require_drive=False, interactive_allowed=False)
+        except GoogleAuthActionRequired as auth_error:
+            self.log(f"오류: Google Docs 연결 확인 실패. 재인증 필요 - {auth_error.user_message}")
+            if hasattr(self, "google_connection_status_var"):
+                self.google_connection_status_var.set("재인증 필요")
+            self.update_status("⚠️ 기록 불가", "Google 재인증 필요", tray_status_text="오류 상태")
+            return None
 
         if not services or 'docs' not in services:
             self.log("오류: Google Docs 연결 확인 실패. 감시를 시작하지 않습니다.")
             if hasattr(self, "google_connection_status_var"):
-                self.google_connection_status_var.set("Google 연결 확인 실패: 다시 시도 필요")
+                self.google_connection_status_var.set("연결 확인 실패")
             self.update_status("⚠️ 기록 불가", "Google 연결 실패", tray_status_text="오류 상태")
             messagebox.showerror(
                 "Google 연결 오류",
@@ -1504,7 +1755,7 @@ class MessengerDocsApp:
 
         self.log("감시 시작 전 Google Docs 연결 확인 완료.")
         if hasattr(self, "google_connection_status_var"):
-            self.google_connection_status_var.set("Google 연결 확인 완료")
+            self.google_connection_status_var.set("연결 확인 완료")
         return services
 
     def create_new_google_doc(self):
@@ -1521,10 +1772,13 @@ class MessengerDocsApp:
         if document_title is None:
             return
 
-        services = self.get_google_services_for_ui()
-        if not services:
-            return
+        self.begin_google_service_request(
+            purpose="create_doc",
+            require_drive=True,
+            on_success=lambda services, title=document_title: self._finish_create_new_google_doc(title, services),
+        )
 
+    def _finish_create_new_google_doc(self, document_title, services):
         created_document = create_google_document(self.log, document_title, services=services)
         if not created_document:
             messagebox.showerror("문서 생성 실패", "새 Google Docs 문서를 만들지 못했습니다.\n로그를 확인하세요.", parent=self.root)
@@ -1550,10 +1804,13 @@ class MessengerDocsApp:
             messagebox.showerror("모듈 오류", "문서 목록 기능을 불러오지 못했습니다.", parent=self.root)
             return
 
-        services = self.get_google_services_for_ui()
-        if not services:
-            return
+        self.begin_google_service_request(
+            purpose="select_doc",
+            require_drive=True,
+            on_success=self._finish_select_google_doc,
+        )
 
+    def _finish_select_google_doc(self, services):
         documents = list_accessible_google_documents(self.log, services=services, page_size=20)
         if documents is None:
             messagebox.showerror("문서 목록 오류", "Google Docs 문서 목록을 불러오지 못했습니다.\n로그를 확인하세요.", parent=self.root)
@@ -1779,6 +2036,8 @@ class MessengerDocsApp:
                 "show_theme_settings": self.show_theme_settings,
                 "show_backup_restore_dialog": self.show_backup_restore_dialog,
                 "save_config": self.save_config,
+                "prompt_google_reauthentication": self.prompt_google_reauthentication,
+                "reset_google_auth": self.reset_google_auth,
                 "clear_extraction_preview": self.clear_extraction_preview,
                 "open_log_folder": lambda: self.open_folder_in_explorer(LOG_DIR_STR),
                 "show_log_popup": self.show_log_popup,
@@ -2493,6 +2752,7 @@ class MessengerDocsApp:
                     or "오류: Google 서비스 초기화 예외" in msg
                     or "오류: Google 서비스 초기화 중 예외 발생" in msg
                     or "오류: Google 서비스 로드 실패" in msg
+                    or "오류: Google 재인증 필요" in msg
                     or "오류: Google 계정 인증 중 오류 발생" in msg
                     or "인증 정보(토큰) 갱신 실패" in msg
                 ):
@@ -2668,10 +2928,13 @@ class MessengerDocsApp:
                 self.save_config()
                 self.log("감시 시작 전 설정 자동 저장됨.")
 
-        google_services = self.verify_google_services_before_monitoring()
-        if not google_services:
-            return
+        self.begin_google_service_request(
+            purpose="monitoring",
+            require_drive=False,
+            on_success=self._start_monitoring_with_services,
+        )
 
+    def _start_monitoring_with_services(self, google_services):
         if not self.docs_target_locked.get():
             self.docs_target_locked.set(True)
             self.refresh_docs_target_ui()
@@ -2716,6 +2979,7 @@ class MessengerDocsApp:
             self.current_activity_var.set("현재 처리 파일: 감시 시작됨")
         self.update_status("감시 중")
         self.log("백그라운드 감시 시작됨.")
+
     def stop_monitoring(self):
         if self.is_monitoring and self.monitoring_thread and self.monitoring_thread.is_alive():
             self.log("감시 중지 요청...")

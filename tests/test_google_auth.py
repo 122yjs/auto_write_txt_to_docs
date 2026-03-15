@@ -1,3 +1,4 @@
+import json
 import tempfile
 import types
 import unittest
@@ -48,7 +49,7 @@ except ModuleNotFoundError:
         def from_client_secrets_file(cls, *_args, **_kwargs):
             return cls()
 
-        def run_local_server(self, port=0):
+        def run_local_server(self, port=0, timeout_seconds=None, open_browser=True):
             return DummyCredentials()
 
     class DummyHttpError(Exception):
@@ -79,8 +80,17 @@ from src.auto_write_txt_to_docs import google_auth
 
 
 class FakeCredentials:
-    def __init__(self):
+    def __init__(self, *, valid=True, expired=False, refresh_token=None, client_id="expected-client"):
+        self.valid = valid
+        self.expired = expired
+        self.refresh_token = refresh_token
+        self.client_id = client_id
+        self.refreshed = False
+
+    def refresh(self, _request):
         self.valid = True
+        self.expired = False
+        self.refreshed = True
 
     def to_json(self):
         return '{"token": "test-token"}'
@@ -89,8 +99,10 @@ class FakeCredentials:
 class FakeFlow:
     def __init__(self, credentials):
         self._credentials = credentials
+        self.last_kwargs = None
 
-    def run_local_server(self, port=0):
+    def run_local_server(self, **kwargs):
+        self.last_kwargs = kwargs
         return self._credentials
 
 
@@ -127,7 +139,7 @@ class FakeDriveService:
 
 
 class GoogleAuthTests(unittest.TestCase):
-    def test_authenticate_uses_user_override_credentials_path_when_present(self):
+    def test_run_interactive_auth_uses_user_override_credentials_path_when_present(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             user_credentials_path = temp_root / "user" / "developer_credentials.json"
@@ -136,33 +148,112 @@ class GoogleAuthTests(unittest.TestCase):
 
             user_credentials_path.parent.mkdir(parents=True, exist_ok=True)
             bundled_credentials_path.parent.mkdir(parents=True, exist_ok=True)
-            user_credentials_path.write_text('{"installed": {}}', encoding="utf-8")
-            bundled_credentials_path.write_text('{"installed": {}}', encoding="utf-8")
+            user_credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
+            bundled_credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
 
             fake_credentials = FakeCredentials()
-            captured = {}
+            fake_flow = FakeFlow(fake_credentials)
             log_messages = []
-
-            def fake_from_client_secrets_file(path, scopes):
-                captured["path"] = path
-                captured["scopes"] = list(scopes)
-                return FakeFlow(fake_credentials)
 
             with patch.object(google_auth, "get_effective_credentials_path", return_value=user_credentials_path), \
                  patch.object(google_auth, "USER_CREDENTIALS_FILE_STR", str(user_credentials_path)), \
                  patch.object(google_auth, "BUNDLED_CREDENTIALS_FILE_STR", str(bundled_credentials_path)), \
                  patch.object(google_auth, "TOKEN_FILE_STR", str(token_path)), \
-                 patch.object(google_auth.InstalledAppFlow, "from_client_secrets_file", side_effect=fake_from_client_secrets_file):
-                credentials = google_auth.authenticate(log_messages.append)
-                token_exists = token_path.exists()
-                token_content = token_path.read_text(encoding="utf-8")
+                 patch.object(google_auth.InstalledAppFlow, "from_client_secrets_file", return_value=fake_flow):
+                credentials = google_auth.run_interactive_auth(log_messages.append, timeout_seconds=180)
 
-        self.assertIs(credentials, fake_credentials)
-        self.assertEqual(captured["path"], str(user_credentials_path))
-        self.assertEqual(captured["scopes"], google_auth.SCOPES)
-        self.assertTrue(token_exists)
-        self.assertIn("test-token", token_content)
-        self.assertIn("백엔드: ✅ Google 계정 인증에 성공했습니다!", log_messages)
+            self.assertIs(credentials, fake_credentials)
+            self.assertEqual(fake_flow.last_kwargs["timeout_seconds"], 180)
+            self.assertTrue(token_path.exists())
+            self.assertIn("test-token", token_path.read_text(encoding="utf-8"))
+            self.assertIn("백엔드: ✅ Google 계정 인증에 성공했습니다!", log_messages)
+
+    def test_authenticate_raises_action_required_when_token_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            credentials_path = temp_root / "developer_credentials.json"
+            credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
+            token_path = temp_root / "cache" / "token.json"
+
+            with patch.object(google_auth, "get_effective_credentials_path", return_value=credentials_path), \
+                 patch.object(google_auth, "TOKEN_FILE_STR", str(token_path)):
+                with self.assertRaises(google_auth.GoogleAuthActionRequired) as exc_info:
+                    google_auth.authenticate(lambda _msg: None)
+
+            self.assertEqual(exc_info.exception.reason_code, "missing_token")
+            self.assertIsNone(exc_info.exception.quarantined_token_path)
+
+    def test_run_interactive_auth_raises_timeout_action_required(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            credentials_path = temp_root / "developer_credentials.json"
+            credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
+
+            failing_flow = types.SimpleNamespace(run_local_server=lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("timed out")))
+
+            with patch.object(google_auth, "get_effective_credentials_path", return_value=credentials_path), \
+                 patch.object(google_auth.InstalledAppFlow, "from_client_secrets_file", return_value=failing_flow):
+                with self.assertRaises(google_auth.GoogleAuthActionRequired) as exc_info:
+                    google_auth.run_interactive_auth(lambda _msg: None, timeout_seconds=180)
+
+        self.assertEqual(exc_info.exception.reason_code, "timeout")
+
+    def test_authenticate_refreshes_expired_token_without_browser(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            credentials_path = temp_root / "developer_credentials.json"
+            credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
+            token_path = temp_root / "cache" / "token.json"
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text('{"token": "old"}', encoding="utf-8")
+            fake_credentials = FakeCredentials(valid=False, expired=True, refresh_token="refresh-token")
+
+            with patch.object(google_auth, "get_effective_credentials_path", return_value=credentials_path), \
+                 patch.object(google_auth, "TOKEN_FILE_STR", str(token_path)), \
+                 patch.object(google_auth.Credentials, "from_authorized_user_file", return_value=fake_credentials):
+                credentials = google_auth.authenticate(lambda _msg: None)
+
+            self.assertIs(credentials, fake_credentials)
+            self.assertTrue(fake_credentials.refreshed)
+            self.assertIn("test-token", token_path.read_text(encoding="utf-8"))
+
+    def test_authenticate_quarantines_token_when_client_id_mismatches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            credentials_path = temp_root / "developer_credentials.json"
+            credentials_path.write_text('{"installed": {"client_id": "expected-client"}}', encoding="utf-8")
+            token_path = temp_root / "cache" / "token.json"
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text('{"token": "stale"}', encoding="utf-8")
+            fake_credentials = FakeCredentials(valid=True, client_id="other-client")
+
+            with patch.object(google_auth, "get_effective_credentials_path", return_value=credentials_path), \
+                 patch.object(google_auth, "TOKEN_FILE_STR", str(token_path)), \
+                 patch.object(google_auth.Credentials, "from_authorized_user_file", return_value=fake_credentials):
+                with self.assertRaises(google_auth.GoogleAuthActionRequired) as exc_info:
+                    google_auth.authenticate(lambda _msg: None)
+
+            self.assertEqual(exc_info.exception.reason_code, "client_id_mismatch")
+            self.assertFalse(token_path.exists())
+            quarantined_path = Path(exc_info.exception.quarantined_token_path)
+            self.assertTrue(quarantined_path.exists())
+            self.assertEqual(quarantined_path.read_text(encoding="utf-8"), '{"token": "stale"}')
+
+    def test_get_google_services_builds_docs_only_when_drive_not_required(self):
+        fake_creds = object()
+        built_services = {}
+
+        def fake_build(service_name, version, credentials):
+            built_services[service_name] = (version, credentials)
+            return f"{service_name}-service"
+
+        with patch.object(google_auth, "authenticate", return_value=fake_creds), \
+             patch.object(google_auth, "build", side_effect=fake_build):
+            services = google_auth.get_google_services(lambda _msg: None, require_drive=False)
+
+        self.assertEqual(services["docs"], "docs-service")
+        self.assertNotIn("drive", services)
+        self.assertEqual(built_services["docs"], ("v1", fake_creds))
 
     def test_get_google_services_builds_docs_and_drive_services(self):
         fake_creds = object()
@@ -174,7 +265,7 @@ class GoogleAuthTests(unittest.TestCase):
 
         with patch.object(google_auth, "authenticate", return_value=fake_creds), \
              patch.object(google_auth, "build", side_effect=fake_build):
-            services = google_auth.get_google_services(lambda _msg: None)
+            services = google_auth.get_google_services(lambda _msg: None, require_drive=True)
 
         self.assertEqual(services["docs"], "docs-service")
         self.assertEqual(services["drive"], "drive-service")

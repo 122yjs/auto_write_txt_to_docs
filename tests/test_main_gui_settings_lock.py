@@ -65,6 +65,7 @@ class FakeLabel(FakeWidget):
 class FakeRoot:
     def __init__(self):
         self.after_calls = []
+        self.window_shown = False
 
     def after(self, delay, callback):
         self.after_calls.append((delay, callback))
@@ -72,6 +73,27 @@ class FakeRoot:
 
     def winfo_exists(self):
         return True
+
+    def deiconify(self):
+        self.window_shown = True
+
+    def lift(self):
+        self.window_shown = True
+
+    def focus_force(self):
+        self.window_shown = True
+
+
+class ImmediateThread:
+    def __init__(self, target=None, args=None, kwargs=None, daemon=None):
+        self.target = target
+        self.args = args or ()
+        self.kwargs = kwargs or {}
+        self.daemon = daemon
+
+    def start(self):
+        if self.target:
+            self.target(*self.args, **self.kwargs)
 
 
 class MainGuiTestBase(unittest.TestCase):
@@ -113,12 +135,14 @@ class MainGuiTestBase(unittest.TestCase):
         app.max_cache_size = FakeVar("10000")
         app.docs_target_status_var = FakeVar("")
         app.log = Mock()
+        app.log_threadsafe = Mock()
         app.update_status = Mock()
         app.update_windows_startup_ui_state = Mock()
         app.is_monitoring = False
         app.monitoring_thread = None
         app.latest_release_info = None
         app._update_check_in_progress = False
+        app.google_auth_operation_in_progress = False
         app.last_result_summary = "아직 없음"
         app.last_success_timestamp = None
         app.readiness_state = {"ready": False, "message": "", "advanced_invalid": False}
@@ -137,6 +161,8 @@ class MainGuiTestBase(unittest.TestCase):
         app.create_doc_button = FakeButton("새 문서 만들기")
         app.manual_doc_input_button = FakeButton("기존 문서 주소 입력")
         app.select_doc_button = FakeButton("문서 목록")
+        app.reauth_button = FakeButton("Google 계정 다시 연결")
+        app.reset_auth_button = FakeButton("인증 초기화")
         app.docs_input_entry = FakeEntry()
         app.docs_lock_button = FakeButton("문서 경로 확정")
         app.docs_target_status_label = FakeLabel()
@@ -157,6 +183,8 @@ class MainGuiTestBase(unittest.TestCase):
             app.create_doc_button,
             app.manual_doc_input_button,
             app.select_doc_button,
+            app.reauth_button,
+            app.reset_auth_button,
         ]
         docs_input_row = FakeFrame()
         docs_input_row.children = [app.docs_input_entry]
@@ -310,14 +338,33 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         self.assertEqual(app.current_activity_tab, main_gui.ACTIVITY_LOG_TAB)
         self.assertEqual(app.pending_activity_counts[main_gui.ACTIVITY_LOG_TAB], 0)
 
-    def test_start_monitoring_auto_locks_document_before_background_run(self):
+    def test_start_monitoring_requests_google_services_before_background_run(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
+        app.settings_changed = False
+        app.parse_max_cache_size = Mock(return_value=10000)
+        app.begin_google_service_request = Mock()
+
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(main_gui.os.path, "exists", return_value=True), patch.object(
+            main_gui.os.path,
+            "isdir",
+            return_value=True,
+        ):
+            app.start_monitoring()
+
+        app.begin_google_service_request.assert_called_once()
+        call_kwargs = app.begin_google_service_request.call_args.kwargs
+        self.assertEqual(call_kwargs["purpose"], "monitoring")
+        self.assertFalse(call_kwargs["require_drive"])
+
+    def test_start_monitoring_with_services_auto_locks_document_before_background_run(self):
         app = self.build_app()
         app.watch_folder.set("C:/watch")
         app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_ID/edit")
         app.settings_changed = False
         app.stop_event = Mock()
         app.parse_max_cache_size = Mock(return_value=10000)
-        app.verify_google_services_before_monitoring = Mock(return_value={"docs": object()})
         app.log_threadsafe = Mock()
         app.extracted_result_threadsafe = Mock()
         app.disable_settings_widgets = Mock()
@@ -332,7 +379,7 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
             "isdir",
             return_value=True,
         ), patch.object(main_gui.threading, "Thread", return_value=fake_thread):
-            app.start_monitoring()
+            app._start_monitoring_with_services({"docs": object()})
 
         self.assertTrue(app.docs_target_locked.get())
         self.assertEqual(app.docs_input_entry.state, "disabled")
@@ -341,11 +388,51 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         self.assertEqual(app.select_doc_button.state, "disabled")
         self.assertEqual(app.start_button.state, "disabled")
         self.assertEqual(app.stop_button.state, "normal")
-        app.verify_google_services_before_monitoring.assert_called_once()
         app.stop_event.clear.assert_called_once()
         app.disable_settings_widgets.assert_called_once()
         fake_thread.start.assert_called_once()
         app.log.assert_any_call("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
+
+    def test_handle_google_auth_action_required_requests_foreground_reauth_on_confirm(self):
+        app = self.build_app()
+        app._start_google_service_worker = Mock()
+        auth_error = main_gui.GoogleAuthActionRequired(
+            "missing_token",
+            "Google 계정 연결이 필요합니다.",
+            quarantined_token_path="C:/cache/token.invalid.json",
+        )
+
+        with patch.object(main_gui.messagebox, "askyesno", return_value=True):
+            app._handle_google_auth_action_required("monitoring", False, Mock(), auth_error)
+
+        self.assertEqual(app.google_connection_status_var.get(), "브라우저에서 승인 대기 중")
+        self.assertTrue(app.root.window_shown)
+        app._start_google_service_worker.assert_called_once()
+        worker_kwargs = app._start_google_service_worker.call_args.kwargs
+        self.assertTrue(worker_kwargs["interactive"])
+        self.assertEqual(worker_kwargs["purpose"], "monitoring")
+
+    def test_begin_google_service_request_prompts_reauth_without_opening_browser_automatically(self):
+        app = self.build_app()
+        on_success = Mock()
+        auth_error = main_gui.GoogleAuthActionRequired("missing_token", "다시 인증이 필요합니다.")
+
+        def fake_get_google_services(*_args, **_kwargs):
+            raise auth_error
+
+        with patch.object(main_gui, "get_google_services", side_effect=fake_get_google_services), \
+             patch.object(main_gui.threading, "Thread", ImmediateThread), \
+             patch.object(main_gui.messagebox, "askyesno", return_value=False), \
+             patch.object(main_gui, "run_interactive_auth", Mock()) as run_interactive_auth_mock, \
+             patch.object(main_gui, "ctk", self.fake_ctk):
+            app.begin_google_service_request("monitoring", False, on_success)
+            for _delay, callback in list(app.root.after_calls):
+                callback()
+
+        self.assertEqual(app.google_connection_status_var.get(), "재인증 필요")
+        self.assertFalse(app.google_auth_operation_in_progress)
+        run_interactive_auth_mock.assert_not_called()
+        on_success.assert_not_called()
 
 
 class MainGuiAutostartTests(MainGuiTestBase):
