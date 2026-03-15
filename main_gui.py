@@ -14,6 +14,7 @@ import platform
 import logging
 import webbrowser
 from datetime import datetime
+from collections import deque
 import psutil  # 메모리 사용량 모니터링용
 import shutil
 from pathlib import Path
@@ -161,6 +162,9 @@ else:
 NOTIFICATION_TITLE = "메신저 Docs 자동 기록"
 MAX_NOTIFICATION_PREVIEW_LINES = 2
 FAILURE_NOTIFICATION_DEBOUNCE_SECONDS = 2.0
+RECENT_RESULT_CARD_LIMIT = 3
+ACTIVITY_RESULT_TAB = "최근 추출 결과"
+ACTIVITY_LOG_TAB = "작업 로그"
 
 # --- Helper Function: URL에서 ID 추출 ---
 def extract_google_id_from_url(url_or_id):
@@ -426,6 +430,13 @@ class MessengerDocsApp:
         self.docs_input = ctk.StringVar()
         self.docs_target_locked = tk.BooleanVar(value=False)
         self.docs_target_status_var = ctk.StringVar(value="문서를 지정하면 여기서 고정 상태를 확인할 수 있습니다.")
+        self.readiness_var = ctk.StringVar(value="준비도 확인 중...")
+        self.google_connection_status_var = ctk.StringVar(value="Google 연결은 감시 시작 시 최종 확인합니다.")
+        self.save_state_var = ctk.StringVar(value="저장됨")
+        self.current_activity_var = ctk.StringVar(value="현재 처리 파일: 대기 중")
+        self.last_success_var = ctk.StringVar(value="마지막 성공: 아직 없음")
+        self.last_result_var = ctk.StringVar(value="마지막 결과: 아직 없음")
+        self.advanced_settings_toggle_text = ctk.StringVar(value="고급 설정 펼치기")
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
         self.show_success_notifications = tk.BooleanVar(value=True)
         self.play_event_sounds = tk.BooleanVar(value=True)
@@ -450,6 +461,18 @@ class MessengerDocsApp:
         self.icon_image = None # 아이콘 이미지 객체 저장
         self.pending_docs_update_line_count = None
         self.current_processing_filename = None
+        self.last_success_timestamp = None
+        self.last_result_summary = "아직 없음"
+        self.latest_status_text = "준비"
+        self.latest_status_detail = None
+        self.readiness_state = {"ready": False, "message": "준비도 확인 중...", "advanced_invalid": False}
+        self.advanced_settings_expanded = False
+        self.pending_activity_counts = {
+            ACTIVITY_RESULT_TAB: 0,
+            ACTIVITY_LOG_TAB: 0,
+        }
+        self.current_activity_tab = ACTIVITY_RESULT_TAB
+        self.recent_results = deque(maxlen=RECENT_RESULT_CARD_LIMIT)
         self.recent_failure_notifications = {}
         self.latest_release_info = None
         self._update_check_in_progress = False
@@ -486,6 +509,8 @@ class MessengerDocsApp:
         # --- 설정 로드 ---
         self.load_config()
         self.settings_changed = False  # 로드 후 변경 플래그 초기화
+        self.update_save_state_ui()
+        self.update_readiness_ui()
         self.root.after(50, self.present_main_window)
 
         # --- 로그 큐 처리 ---
@@ -866,29 +891,272 @@ class MessengerDocsApp:
     def on_setting_changed(self, *args):
         """설정 변경 감지 및 상태 표시 업데이트"""
         self.settings_changed = True
-        
-        # 감시 폴더 정보 업데이트
-        folder_path = self.watch_folder.get().strip()
-        if folder_path:
-            folder_name = os.path.basename(folder_path) or folder_path
-            self.folder_info_var.set(f"폴더: {folder_name}")
-        else:
-            self.folder_info_var.set("폴더: 설정되지 않음")
-            
-        # Docs 문서 정보 업데이트
-        docs_input = self.docs_input.get().strip()
-        if docs_input:
-            # URL에서 ID 추출
-            docs_id = extract_google_id_from_url(docs_input)
-            if len(docs_id) > 12:  # ID가 너무 길면 줄임
-                docs_id_display = docs_id[:10] + "..."
-            else:
-                docs_id_display = docs_id
-            self.docs_info_var.set(f"문서: {docs_id_display}")
-        else:
-            self.docs_info_var.set("문서: 설정되지 않음")
-
+        self.update_save_state_ui()
+        self.update_folder_and_docs_summary()
         self.refresh_docs_target_ui()
+        self.update_readiness_ui()
+
+    def update_folder_and_docs_summary(self):
+        """상단 상태 패널의 폴더/문서 요약 텍스트를 갱신한다."""
+        folder_path = self.watch_folder.get().strip()
+        if hasattr(self, "folder_info_var"):
+            if folder_path:
+                folder_name = os.path.basename(folder_path) or folder_path
+                self.folder_info_var.set(f"폴더: {folder_name}")
+            else:
+                self.folder_info_var.set("폴더: 설정되지 않음")
+
+        if hasattr(self, "docs_info_var"):
+            docs_input = self.docs_input.get().strip()
+            if docs_input:
+                docs_id = extract_google_id_from_url(docs_input)
+                docs_id_display = docs_id[:10] + "..." if len(docs_id) > 12 else docs_id
+                self.docs_info_var.set(f"문서: {docs_id_display}")
+            else:
+                self.docs_info_var.set("문서: 설정되지 않음")
+
+    def update_save_state_ui(self):
+        """설정 저장 상태 배지와 문구를 갱신한다."""
+        is_dirty = bool(getattr(self, "settings_changed", False))
+        save_text = "저장 안 됨" if is_dirty else "저장됨"
+        if hasattr(self, "save_state_var"):
+            self.save_state_var.set(save_text)
+
+        badge_widget = getattr(self, "unsaved_changes_badge", None)
+        if badge_widget and hasattr(badge_widget, "configure"):
+            if is_dirty:
+                badge_widget.configure(
+                    text=save_text,
+                    fg_color=("#FDE68A", "#7C5E10"),
+                    text_color=("#7C2D12", "#FEF3C7"),
+                )
+            else:
+                badge_widget.configure(
+                    text=save_text,
+                    fg_color=("gray90", "gray22"),
+                    text_color=("gray35", "gray82"),
+                )
+
+    def compute_readiness_state(self):
+        """로컬에서 즉시 판별 가능한 준비 상태를 계산한다."""
+        watch_folder = self.watch_folder.get().strip()
+        docs_input_val = self.docs_input.get().strip()
+
+        if not watch_folder:
+            return {
+                "ready": False,
+                "message": "준비 필요: 감시 폴더를 선택하세요.",
+                "advanced_invalid": False,
+            }
+        if not os.path.exists(watch_folder) or not os.path.isdir(watch_folder):
+            return {
+                "ready": False,
+                "message": "준비 필요: 유효한 감시 폴더가 필요합니다.",
+                "advanced_invalid": False,
+            }
+        if not docs_input_val or not extract_google_id_from_url(docs_input_val):
+            return {
+                "ready": False,
+                "message": "준비 필요: Google Docs URL 또는 ID를 확인하세요.",
+                "advanced_invalid": False,
+            }
+
+        try:
+            self.parse_max_cache_size()
+        except ValueError:
+            return {
+                "ready": False,
+                "message": "준비 필요: 라인 캐시 크기를 확인하세요.",
+                "advanced_invalid": True,
+            }
+
+        return {
+            "ready": True,
+            "message": "준비 완료: 감시 시작 시 Google 연결을 최종 확인합니다.",
+            "advanced_invalid": False,
+        }
+
+    def update_advanced_settings_visibility(self):
+        """고급 설정 펼침 상태를 UI에 반영한다."""
+        expanded = bool(getattr(self, "advanced_settings_expanded", False))
+        toggle_text = "고급 설정 숨기기" if expanded else "고급 설정 펼치기"
+        if hasattr(self, "advanced_settings_toggle_text"):
+            self.advanced_settings_toggle_text.set(toggle_text)
+
+        toggle_button = getattr(self, "advanced_settings_toggle_button", None)
+        if toggle_button and hasattr(toggle_button, "configure"):
+            toggle_button.configure(text=toggle_text)
+
+        advanced_frame = getattr(self, "advanced_settings_frame", None)
+        if not advanced_frame or not hasattr(advanced_frame, "winfo_exists") or not advanced_frame.winfo_exists():
+            return
+
+        try:
+            is_visible = bool(advanced_frame.winfo_manager())
+        except Exception:
+            is_visible = False
+
+        if expanded and not is_visible:
+            advanced_frame.pack(fill="x", padx=14, pady=(0, 8))
+        elif not expanded and is_visible:
+            advanced_frame.pack_forget()
+
+    def toggle_advanced_settings(self):
+        """고급 설정 영역의 펼침 상태를 토글한다."""
+        self.advanced_settings_expanded = not bool(getattr(self, "advanced_settings_expanded", False))
+        self.update_advanced_settings_visibility()
+
+    def update_readiness_ui(self):
+        """준비도 문구와 CTA 활성 상태를 갱신한다."""
+        readiness = self.compute_readiness_state()
+        self.readiness_state = readiness
+
+        if hasattr(self, "readiness_var"):
+            self.readiness_var.set(readiness["message"])
+
+        readiness_label = getattr(self, "readiness_label", None)
+        if readiness_label and hasattr(readiness_label, "configure"):
+            readiness_label.configure(
+                text_color=("#0F9D58", "#81C995") if readiness["ready"] else ("#B45309", "#FBBF24")
+            )
+
+        if readiness["advanced_invalid"] and not self.is_monitoring:
+            self.advanced_settings_expanded = True
+        self.update_advanced_settings_visibility()
+        self.update_monitoring_action_ui()
+
+    def update_runtime_summary_ui(self):
+        """실행 중 상태 요약 문구를 갱신한다."""
+        current_file = getattr(self, "current_processing_filename", None) or "대기 중"
+        pending_line_count = getattr(self, "pending_docs_update_line_count", None)
+        if pending_line_count:
+            current_file = f"{current_file} · {pending_line_count}줄 기록 준비"
+        if hasattr(self, "current_activity_var"):
+            self.current_activity_var.set(f"현재 처리 파일: {current_file}")
+
+        last_success_timestamp = getattr(self, "last_success_timestamp", None)
+        if hasattr(self, "last_success_var"):
+            if last_success_timestamp:
+                self.last_success_var.set(f"마지막 성공: {last_success_timestamp}")
+            else:
+                self.last_success_var.set("마지막 성공: 아직 없음")
+
+        if hasattr(self, "last_result_var"):
+            self.last_result_var.set(f"마지막 결과: {getattr(self, 'last_result_summary', '아직 없음')}")
+
+    def update_monitoring_action_ui(self):
+        """감시 상태와 준비도에 따라 CTA 버튼 상태를 맞춘다."""
+        readiness_ready = bool(getattr(self, "readiness_state", {}).get("ready"))
+        start_state = "disabled" if self.is_monitoring or not readiness_ready else "normal"
+        stop_state = "normal" if self.is_monitoring else "disabled"
+
+        if hasattr(self, "start_button"):
+            self.start_button.configure(state=start_state)
+        if hasattr(self, "stop_button"):
+            self.stop_button.configure(state=stop_state)
+
+        start_cta = getattr(self, "start_cta_button", None)
+        stop_cta = getattr(self, "stop_cta_button", None)
+        if start_cta and hasattr(start_cta, "configure"):
+            start_cta.configure(state=start_state)
+        if stop_cta and hasattr(stop_cta, "configure"):
+            stop_cta.configure(state=stop_state)
+        if start_cta and hasattr(start_cta, "grid") and hasattr(start_cta, "grid_remove"):
+            try:
+                if self.is_monitoring:
+                    start_cta.grid_remove()
+                else:
+                    start_cta.grid()
+            except Exception:
+                pass
+        if stop_cta and hasattr(stop_cta, "grid") and hasattr(stop_cta, "grid_remove"):
+            try:
+                if self.is_monitoring:
+                    stop_cta.grid()
+                else:
+                    stop_cta.grid_remove()
+            except Exception:
+                pass
+
+    def get_activity_tab_label(self, tab_name):
+        """대기 카운트를 반영한 활동 탭 라벨을 반환한다."""
+        pending_count = getattr(self, "pending_activity_counts", {}).get(tab_name, 0)
+        return f"{tab_name} ({pending_count})" if pending_count else tab_name
+
+    def refresh_activity_tab_labels(self):
+        """현재 대기 카운트에 맞춰 활동 탭 라벨을 갱신한다."""
+        activity_tabview = getattr(self, "activity_tabview", None)
+        if activity_tabview is None or not hasattr(activity_tabview, "rename"):
+            return
+
+        for tab_name in (ACTIVITY_RESULT_TAB, ACTIVITY_LOG_TAB):
+            target_label = self.get_activity_tab_label(tab_name)
+            current_label = None
+            for candidate in (tab_name, target_label):
+                try:
+                    activity_tabview.tab(candidate)
+                    current_label = candidate
+                    break
+                except Exception:
+                    continue
+            if current_label and current_label != target_label:
+                activity_tabview.rename(current_label, target_label)
+
+    def set_activity_tab(self, tab_name, reset_count=True):
+        """활동 탭을 변경하고 필요 시 대기 카운트를 초기화한다."""
+        if not hasattr(self, "pending_activity_counts"):
+            self.pending_activity_counts = {ACTIVITY_RESULT_TAB: 0, ACTIVITY_LOG_TAB: 0}
+        self.current_activity_tab = tab_name
+        if reset_count:
+            self.pending_activity_counts[tab_name] = 0
+
+        activity_tabview = getattr(self, "activity_tabview", None)
+        if activity_tabview is not None and hasattr(activity_tabview, "set"):
+            try:
+                activity_tabview.set(self.get_activity_tab_label(tab_name))
+            except Exception:
+                try:
+                    activity_tabview.set(tab_name)
+                except Exception:
+                    pass
+        self.refresh_activity_tab_labels()
+
+    def on_activity_tab_changed(self):
+        """현재 선택된 활동 탭에 맞춰 대기 카운트를 정리한다."""
+        activity_tabview = getattr(self, "activity_tabview", None)
+        if activity_tabview is None or not hasattr(activity_tabview, "get"):
+            return
+
+        try:
+            selected_label = activity_tabview.get()
+        except Exception:
+            return
+
+        selected_tab = ACTIVITY_RESULT_TAB if selected_label.startswith(ACTIVITY_RESULT_TAB) else ACTIVITY_LOG_TAB
+        self.current_activity_tab = selected_tab
+        self.pending_activity_counts[selected_tab] = 0
+        self.refresh_activity_tab_labels()
+
+    def register_activity_event(self, tab_name, auto_switch=False):
+        """활동 탭 대기 카운트와 자동 전환을 처리한다."""
+        if not hasattr(self, "pending_activity_counts"):
+            self.pending_activity_counts = {ACTIVITY_RESULT_TAB: 0, ACTIVITY_LOG_TAB: 0}
+        if not hasattr(self, "current_activity_tab"):
+            self.current_activity_tab = ACTIVITY_RESULT_TAB
+        if auto_switch:
+            self.set_activity_tab(tab_name)
+            return
+
+        if self.current_activity_tab != tab_name:
+            self.pending_activity_counts[tab_name] += 1
+            self.refresh_activity_tab_labels()
+
+    def update_last_result_summary(self, summary_text, success_timestamp=None):
+        """마지막 결과 요약 문구를 갱신한다."""
+        self.last_result_summary = summary_text
+        if success_timestamp:
+            self.last_success_timestamp = success_timestamp
+        self.update_runtime_summary_ui()
 
     def set_launch_on_windows_startup_value(self, enabled, suppress_sync=True):
         """자동 실행 변수 값을 설정하고 필요 시 즉시 동기화를 억제한다."""
@@ -1206,6 +1474,8 @@ class MessengerDocsApp:
         """감시 시작 전에 Google Docs 기록 가능 여부를 확인한다."""
         if not get_google_services:
             self.log("오류: Google 인증 모듈을 불러오지 못해 감시를 시작할 수 없습니다.")
+            if hasattr(self, "google_connection_status_var"):
+                self.google_connection_status_var.set("Google 연결 확인 실패: 인증 모듈 오류")
             self.update_status("⚠️ 기록 불가", "Google 인증 모듈 오류", tray_status_text="오류 상태")
             messagebox.showerror(
                 "Google 연결 오류",
@@ -1215,11 +1485,15 @@ class MessengerDocsApp:
             return None
 
         self.log("감시 시작 전 Google Docs 연결 확인 중...")
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("Google 연결 확인 중...")
         self.update_status("Google 연결 확인 중...")
         services = get_google_services(self.log)
 
         if not services or 'docs' not in services:
             self.log("오류: Google Docs 연결 확인 실패. 감시를 시작하지 않습니다.")
+            if hasattr(self, "google_connection_status_var"):
+                self.google_connection_status_var.set("Google 연결 확인 실패: 다시 시도 필요")
             self.update_status("⚠️ 기록 불가", "Google 연결 실패", tray_status_text="오류 상태")
             messagebox.showerror(
                 "Google 연결 오류",
@@ -1229,6 +1503,8 @@ class MessengerDocsApp:
             return None
 
         self.log("감시 시작 전 Google Docs 연결 확인 완료.")
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("Google 연결 확인 완료")
         return services
 
     def create_new_google_doc(self):
@@ -1414,11 +1690,16 @@ class MessengerDocsApp:
 
     def update_status(self, status_text, detail_text=None, tray_status_text=None):
         """상태 표시 업데이트 (상세 내용 추가 가능)"""
+        self.latest_status_text = status_text
+        self.latest_status_detail = detail_text
         if detail_text:
             full_status = f"{status_text} ({detail_text})"
         else:
             full_status = status_text
         self.status_var.set(full_status)
+        if status_text in {"Docs 업데이트 완료", "중복 파일명 기록", "중복으로 기록 안 함"}:
+            self.update_last_result_summary(full_status, success_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self.update_runtime_summary_ui()
         self.update_tray_status(tray_status_text or status_text, detail_text)
         self.root.update_idletasks()
 
@@ -1474,6 +1755,13 @@ class MessengerDocsApp:
                 "play_event_sounds": self.play_event_sounds,
                 "docs_input": self.docs_input,
                 "docs_target_status_var": self.docs_target_status_var,
+                "readiness_var": self.readiness_var,
+                "google_connection_status_var": self.google_connection_status_var,
+                "save_state_var": self.save_state_var,
+                "current_activity_var": self.current_activity_var,
+                "last_success_var": self.last_success_var,
+                "last_result_var": self.last_result_var,
+                "advanced_settings_toggle_text": self.advanced_settings_toggle_text,
             },
             callbacks={
                 "optimize_memory": self.optimize_memory,
@@ -1497,6 +1785,8 @@ class MessengerDocsApp:
                 "show_log_search_dialog": self.show_log_search_dialog,
                 "clear_log": self.clear_log,
                 "validate_positive_integer_input": self.validate_positive_integer_input,
+                "toggle_advanced_settings": self.toggle_advanced_settings,
+                "on_activity_tab_changed": self.on_activity_tab_changed,
             },
             ctk_module=ctk,
             font_family=self.ui_font_family,
@@ -1508,6 +1798,11 @@ class MessengerDocsApp:
         if hasattr(self, "log_text"):
             self.configure_log_tags(self.log_text)
         self.refresh_docs_target_ui()
+        self.update_folder_and_docs_summary()
+        self.update_save_state_ui()
+        self.update_runtime_summary_ui()
+        self.update_readiness_ui()
+        self.refresh_activity_tab_labels()
         self.update_windows_startup_ui_state()
         self.setup_watch_folder_drag_and_drop()
 
@@ -1991,8 +2286,88 @@ class MessengerDocsApp:
     def log_threadsafe(self, message): self.log_queue.put(message)
     def extracted_result_threadsafe(self, result_payload): self.result_queue.put(result_payload)
 
+    def render_recent_result_cards(self):
+        """최근 추출 결과 카드를 다시 그린다."""
+        result_cards_frame = getattr(self, "result_cards_frame", None)
+        if not result_cards_frame or not hasattr(result_cards_frame, "winfo_exists") or not result_cards_frame.winfo_exists():
+            return
+
+        try:
+            for child in result_cards_frame.winfo_children():
+                child.destroy()
+
+            if not self.recent_results:
+                ctk.CTkLabel(
+                    result_cards_frame,
+                    text="아직 표시할 최근 추출 결과가 없습니다.",
+                    font=self.build_ui_font(12),
+                    text_color=("gray45", "gray68"),
+                    anchor="w",
+                    justify="left",
+                ).pack(fill="x", padx=4, pady=(4, 0))
+                return
+
+            accent_map = {
+                "성공": ("#DCFCE7", "#14532D"),
+                "중복 기록": ("#FEF3C7", "#92400E"),
+            }
+            for card in self.recent_results:
+                accent_fg, accent_text = accent_map.get(card["result_type"], ("#E0E7FF", "#1E3A8A"))
+                card_frame = ctk.CTkFrame(result_cards_frame, corner_radius=12, fg_color=("gray97", "gray18"))
+                card_frame.pack(fill="x", pady=(0, 10))
+
+                header_row = ctk.CTkFrame(card_frame, fg_color="transparent")
+                header_row.pack(fill="x", padx=14, pady=(14, 8))
+
+                title_frame = ctk.CTkFrame(header_row, fg_color="transparent")
+                title_frame.pack(side="left", fill="x", expand=True)
+                ctk.CTkLabel(
+                    title_frame,
+                    text=card["file_title"],
+                    font=self.build_ui_font(13, "bold"),
+                    anchor="w",
+                ).pack(anchor="w")
+                ctk.CTkLabel(
+                    title_frame,
+                    text=f"{card['extracted_time']} · {card['line_count']}줄",
+                    font=self.build_ui_font(11),
+                    text_color=("gray45", "gray70"),
+                    anchor="w",
+                ).pack(anchor="w", pady=(4, 0))
+
+                badge = ctk.CTkLabel(
+                    header_row,
+                    text=card["result_type"],
+                    font=self.build_ui_font(11, "bold"),
+                    corner_radius=999,
+                    fg_color=accent_fg,
+                    text_color=accent_text,
+                    padx=10,
+                    pady=4,
+                )
+                badge.pack(side="right", padx=(10, 0))
+
+                ctk.CTkLabel(
+                    card_frame,
+                    text=card["preview_text"],
+                    font=self.build_ui_font(12),
+                    justify="left",
+                    anchor="w",
+                    wraplength=760,
+                ).pack(fill="x", padx=14, pady=(0, 14))
+        except Exception:
+            pass
+
     def clear_extraction_preview(self):
         """최근 추출 결과 미리보기를 초기화합니다."""
+        if not hasattr(self, "recent_results"):
+            self.recent_results = deque(maxlen=RECENT_RESULT_CARD_LIMIT)
+        self.recent_results.clear()
+        if hasattr(self, "pending_activity_counts"):
+            self.pending_activity_counts[ACTIVITY_RESULT_TAB] = 0
+            self.refresh_activity_tab_labels()
+        self.render_recent_result_cards()
+
         if hasattr(self, "result_preview_text") and self.root.winfo_exists():
             try:
                 self.result_preview_text.configure(state='normal')
@@ -2003,8 +2378,10 @@ class MessengerDocsApp:
 
     def append_extraction_preview(self, result_payload):
         """최근 추출 결과를 GUI 미리보기 패널에 표시합니다."""
-        if not hasattr(self, "result_preview_text") or not self.root.winfo_exists():
+        if not self.root.winfo_exists():
             return
+        if not hasattr(self, "recent_results"):
+            self.recent_results = deque(maxlen=RECENT_RESULT_CARD_LIMIT)
 
         file_title = result_payload.get("file_title", "이름 없는 파일")
         extracted_time = result_payload.get("extracted_time", "시간 정보 없음")
@@ -2012,6 +2389,7 @@ class MessengerDocsApp:
         preview_text = result_payload.get("preview_text", "").strip()
         preview_line_count = len([line for line in preview_text.splitlines() if line.strip()])
         remaining_lines = max(0, line_count - preview_line_count)
+        result_type = "중복 기록" if result_payload.get("duplicate_only") else "성공"
 
         preview_block = (
             f"[본래 파일 제목] {file_title}\n"
@@ -2024,20 +2402,39 @@ class MessengerDocsApp:
             preview_block += f"... 외 {remaining_lines}줄\n"
         preview_block += f"{'-' * 44}\n"
 
+        preview_lines = [line.strip() for line in preview_text.splitlines() if line.strip()]
+        if remaining_lines > 0:
+            preview_lines.append(f"... 외 {remaining_lines}줄")
+        preview_summary = "\n".join(preview_lines[:4]) if preview_lines else "미리보기 내용이 없습니다."
+
+        self.recent_results.appendleft(
+            {
+                "file_title": file_title,
+                "extracted_time": extracted_time,
+                "line_count": line_count,
+                "preview_text": preview_summary,
+                "result_type": result_type,
+            }
+        )
+        self.update_last_result_summary(f"{result_type}: {file_title}", success_timestamp=extracted_time)
+        self.render_recent_result_cards()
+        self.register_activity_event(ACTIVITY_RESULT_TAB)
+
         try:
-            self.result_preview_text.configure(state='normal')
-            existing_text = self.result_preview_text.get("1.0", ctk.END).strip()
-            new_text = preview_block if not existing_text else preview_block + existing_text + "\n"
-            self.result_preview_text.delete("1.0", ctk.END)
-            self.result_preview_text.insert("1.0", new_text)
-
-            lines = self.result_preview_text.get("1.0", ctk.END).splitlines()
-            if len(lines) > 28:
+            if hasattr(self, "result_preview_text"):
+                self.result_preview_text.configure(state='normal')
+                existing_text = self.result_preview_text.get("1.0", ctk.END).strip()
+                new_text = preview_block if not existing_text else preview_block + existing_text + "\n"
                 self.result_preview_text.delete("1.0", ctk.END)
-                self.result_preview_text.insert("1.0", "\n".join(lines[:28]) + "\n")
+                self.result_preview_text.insert("1.0", new_text)
 
-            self.result_preview_text.configure(state='disabled')
-            self.result_preview_text.see("1.0")
+                lines = self.result_preview_text.get("1.0", ctk.END).splitlines()
+                if len(lines) > 28:
+                    self.result_preview_text.delete("1.0", ctk.END)
+                    self.result_preview_text.insert("1.0", "\n".join(lines[:28]) + "\n")
+
+                self.result_preview_text.configure(state='disabled')
+                self.result_preview_text.see("1.0")
         except Exception:
             pass
 
@@ -2062,12 +2459,14 @@ class MessengerDocsApp:
                     self.current_processing_filename = None
                 elif "Google Docs에" in msg and "줄 추가 시도" in msg:
                     self.pending_docs_update_line_count = extract_docs_update_line_count(msg)
+                    self.update_runtime_summary_ui()
                 elif "Google Docs 업데이트 완료" in msg:
                     self.update_status("Docs 업데이트 완료", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     # 잠시 후 다시 감시 중 상태로 변경 (is_monitoring 확인 추가)
                     if self.is_monitoring:
                         self.root.after(2000, lambda: self.update_status("감시 중", f"마지막 업데이트 후 대기: {datetime.now().strftime('%H:%M:%S')}"))
                     self.pending_docs_update_line_count = None
+                    self.update_runtime_summary_ui()
                 elif "Google Docs 중복 파일명 기록 완료" in msg:
                     duplicate_filename = extract_filename_from_log_message(msg) or self.current_processing_filename
                     self.update_status("중복 파일명 기록", duplicate_filename or "파일명 기록 완료")
@@ -2113,6 +2512,9 @@ class MessengerDocsApp:
                         self.update_status("⚠️ 기록 불가", error_detail, tray_status_text="오류 상태")
                     else:
                         self.update_status("오류 발생", error_detail, tray_status_text="오류 상태")
+                    self.update_last_result_summary(f"오류: {error_detail}")
+                    self.register_activity_event(ACTIVITY_LOG_TAB, auto_switch=True)
+                    self.update_runtime_summary_ui()
                     self.notify_background_event(
                         "failure",
                         filename=extract_filename_from_log_message(msg) or self.current_processing_filename,
@@ -2157,6 +2559,8 @@ class MessengerDocsApp:
             self.max_cache_size.set(str(config_data["max_cache_size"]))
             self.log("설정 저장 완료.")
             self.settings_changed = False  # 설정 저장 후 변경 플래그 초기화
+            self.update_save_state_ui()
+            self.update_readiness_ui()
         except Exception as e: messagebox.showerror("저장 오류", f"설정 저장 실패:\n{e}", parent=self.root); self.log(f"오류: 설정 저장 실패 - {e}")
 
     def get_current_config_data(self):
@@ -2229,10 +2633,17 @@ class MessengerDocsApp:
 
             # 설정 로드 후 상태 표시 업데이트
             self.on_setting_changed()
+            self.settings_changed = False
+            self.update_save_state_ui()
         except Exception as e: messagebox.showwarning("로드 오류", f"설정 파일 로드 실패:\n{e}", parent=self.root); self.log(f"경고: 설정 파일 로드 실패 - {e}")
     def start_monitoring(self):
         if not run_monitoring: 
             messagebox.showerror("실행 오류", "백엔드 모듈 로드 불가.", parent=self.root)
+            return
+
+        self.update_readiness_ui()
+        if not self.readiness_state.get("ready"):
+            self.update_status("준비 필요", self.readiness_state.get("message"))
             return
         
         # 입력값 유효성 검사
@@ -2299,9 +2710,10 @@ class MessengerDocsApp:
         )
         self.monitoring_thread.start()
         
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
         self.disable_settings_widgets()
+        self.update_monitoring_action_ui()
+        if hasattr(self, "current_activity_var"):
+            self.current_activity_var.set("현재 처리 파일: 감시 시작됨")
         self.update_status("감시 중")
         self.log("백그라운드 감시 시작됨.")
     def stop_monitoring(self):
@@ -2309,7 +2721,7 @@ class MessengerDocsApp:
             self.log("감시 중지 요청...")
             self.update_status("감시 중지 중...")
             self.stop_event.set()
-            self.stop_button.configure(state="disabled")
+            self.update_monitoring_action_ui()
             # 스레드가 종료될 때까지 기다린 후 상태 복구
             def wait_and_finalize():
                 self.monitoring_thread.join(timeout=5)
@@ -2326,9 +2738,12 @@ class MessengerDocsApp:
             self.docs_target_locked.set(False)
         if hasattr(self, 'root') and self.root.winfo_exists():
             try:
-                self.start_button.configure(state="normal")
-                self.stop_button.configure(state="disabled")
                 self.enable_settings_widgets()
+                self.update_readiness_ui()
+                self.update_monitoring_action_ui()
+                self.current_processing_filename = None
+                self.pending_docs_update_line_count = None
+                self.update_runtime_summary_ui()
                 if was_docs_locked:
                     self.log("감시 중지로 대상 문서 고정이 해제되었습니다.")
                 self.update_status("준비")
