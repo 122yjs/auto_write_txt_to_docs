@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 import logging
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 try:
     from watchdog.observers import Observer  # noqa: F401
@@ -534,6 +534,37 @@ class BackendProcessorTests(unittest.TestCase):
 
         self.assertEqual(saved_state[filepath]["last_byte_offset"], 15)
         self.assertFalse(backend_processor.processed_state_dirty)
+
+    def test_run_monitoring_stops_when_background_auth_requires_foreground(self):
+        logs = []
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        
+        class FakeAuthRequired(Exception):
+            def __init__(self, reason_code, user_message):
+                super().__init__(user_message)
+                self.reason_code = reason_code
+                self.user_message = user_message
+
+        auth_error = FakeAuthRequired("missing_token", "Google 계정 다시 연결이 필요합니다.")
+
+        with patch.object(backend_processor, "configure_max_global_cache_size", return_value=10000), \
+             patch.object(backend_processor, "load_line_cache"), \
+             patch.object(backend_processor, "load_processed_state"), \
+             patch.object(backend_processor, "GoogleAuthActionRequired", FakeAuthRequired), \
+             patch.object(backend_processor, "get_google_services", side_effect=auth_error), \
+             patch.object(backend_processor, "Observer") as observer_mock, \
+             patch.object(backend_processor, "save_line_cache") as save_line_cache_mock:
+            backend_processor.run_monitoring(
+                {"watch_folder": self.temp_dir.name, "docs_id": "doc-1"},
+                logs.append,
+                stop_event,
+            )
+
+        observer_mock.assert_not_called()
+        save_line_cache_mock.assert_not_called()
+        self.assertTrue(any("오류: Google 재인증 필요" in message for message in logs))
+        self.assertTrue(any("브라우저 인증을 시작하지 않습니다" in message for message in logs))
 
 
 if __name__ == "__main__":

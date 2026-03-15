@@ -16,9 +16,10 @@ from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유
 
 # google_auth 모듈 임포트
 try:
-    from .google_auth import get_google_services
+    from .google_auth import GoogleAuthActionRequired, get_google_services
 except ImportError:
     print("오류: google_auth.py 모듈을 찾을 수 없습니다. Google API 인증 기능이 작동하지 않습니다.")
+    GoogleAuthActionRequired = Exception
     get_google_services = None
 
 try:
@@ -934,10 +935,12 @@ def run_monitoring(
     # Google API 서비스 로드 (Docs만 필수)
     if not google_services and get_google_services:
         try:
-            # get_google_services는 내부적으로 필요한 모든 서비스(Docs 포함)를 로드 시도할 수 있음
-            # path_utils에서 자동으로 credentials 경로를 찾아서 사용
             backend_logger.info("Google API 서비스 로드 시도")
-            google_services = get_google_services(log_func_threadsafe)
+            google_services = get_google_services(
+                log_func_threadsafe,
+                require_drive=False,
+                interactive_allowed=False,
+            )
             if google_services and 'docs' in google_services:
                 log_func_threadsafe("백엔드: Google Docs 서비스 로드 완료.")
                 backend_logger.info("Google Docs 서비스 로드 완료.")
@@ -954,6 +957,15 @@ def run_monitoring(
                 # 사용자에게 명확히 알리고, 여기서는 Docs 업데이트 없이 감시만 진행될 수 있음을 인지시켜야 함.
                 # 또는, 여기서 감시를 시작하지 않고 종료할 수도 있습니다.
                 # 현재는 Docs 서비스 없이 계속 진행하도록 되어있으므로, process_file 함수에서 docs_service가 None일 때의 처리가 중요합니다.
+        except GoogleAuthActionRequired as auth_error:
+            error_msg = (
+                f"오류: Google 재인증 필요 - 사유={auth_error.reason_code}. "
+                "백그라운드 감시에서는 브라우저 인증을 시작하지 않습니다. "
+                "메인 창에서 계정을 다시 연결한 뒤 감시를 다시 시작하세요."
+            )
+            log_func_threadsafe(error_msg)
+            backend_logger.warning(f"백그라운드에서 Google 재인증 필요 감지: {auth_error.reason_code}")
+            return
         except Exception as e: # get_google_services() 호출 중 발생한 예외
             error_msg = f"오류: Google 서비스 초기화 중 예외 발생 - {e}. "\
                         "인증 설정, 네트워크 연결 또는 API 할당량을 확인하세요."

@@ -637,7 +637,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     control_card.pack(fill="x", pady=(0, 10))
 
     row = ctk.CTkFrame(control_card, fg_color="transparent")
-    row.pack(fill="x", padx=14, pady=10)
+    row.pack(fill="x", padx=14, pady=(10, 6))
 
     open_docs_button = ctk.CTkButton(
         row,
@@ -695,11 +695,52 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     )
     theme_button.pack(side="right", padx=(0, 10))
 
+    auth_row = ctk.CTkFrame(control_card, fg_color="transparent")
+    auth_row.pack(fill="x", padx=14, pady=(0, 10))
+
+    reauth_button = ctk.CTkButton(
+        auth_row,
+        text="Google 계정 다시 연결",
+        command=callbacks["prompt_google_reauthentication"],
+        width=160,
+        height=34,
+        corner_radius=12,
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    reauth_button.pack(side="left")
+    _attach_tooltip(
+        reauth_button,
+        "브라우저 인증을 다시 진행해 현재 앱과 Google 계정 연결을 복구합니다.",
+    )
+
+    reset_auth_button = ctk.CTkButton(
+        auth_row,
+        text="인증 초기화",
+        command=callbacks["reset_google_auth"],
+        width=110,
+        height=34,
+        corner_radius=12,
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    reset_auth_button.pack(side="left", padx=(10, 0))
+    _attach_tooltip(
+        reset_auth_button,
+        "현재 토큰을 격리 보관하고 다음 연결부터 새 인증을 사용하도록 초기화합니다.",
+    )
+
     return {
         "open_docs_button": open_docs_button,
         "backup_restore_button": backup_restore_button,
         "theme_button": theme_button,
         "save_button": save_button,
+        "reauth_button": reauth_button,
+        "reset_auth_button": reset_auth_button,
     }
 
 
