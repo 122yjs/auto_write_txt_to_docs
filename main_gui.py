@@ -166,6 +166,17 @@ else:
     DnDCompatibleTk = ctk.CTk
 
 
+def get_missing_critical_modules():
+    """필수 모듈의 누락 여부를 검사하고 이름 목록을 반환한다."""
+    checks = [
+        (run_monitoring, "백엔드 처리(backend_processor)"),
+        (get_google_services, "Google 인증(google_auth)"),
+        (build_main_window_ui, "메인 UI(main_window_ui)"),
+        (load_app_config, "설정 관리(config_manager)"),
+    ]
+    return [name for module, name in checks if module is None]
+
+
 NOTIFICATION_TITLE = "메신저 Docs 자동 기록"
 MAX_NOTIFICATION_PREVIEW_LINES = 2
 FAILURE_NOTIFICATION_DEBOUNCE_SECONDS = 2.0
@@ -564,6 +575,11 @@ class MessengerDocsApp:
 
         # --- 위젯 생성 ---
         self.create_widgets()
+
+        # --- 누락 모듈 경고 배너 ---
+        self.missing_modules = get_missing_critical_modules()
+        if self.missing_modules:
+            self._show_missing_module_banner()
 
         # --- 설정 로드 ---
         self.load_config()
@@ -2317,6 +2333,32 @@ class MessengerDocsApp:
         self.refresh_activity_tab_labels()
         self.update_windows_startup_ui_state()
         self.setup_watch_folder_drag_and_drop()
+
+    def _show_missing_module_banner(self):
+        """핵심 모듈 누락 시 메인 화면 상단에 경고 배너를 표시한다."""
+        if not self.missing_modules:
+            return
+
+        module_list = ", ".join(self.missing_modules)
+        banner = ctk.CTkFrame(self.root, fg_color=("#FEE2E2", "#7F1D1D"), corner_radius=12, height=56)
+        # main_frame 앞에 삽입하여 화면 최상단에 표시
+        if hasattr(self, "main_frame") and self.main_frame:
+            banner.pack(fill="x", padx=14, pady=(8, 0), before=self.main_frame)
+        else:
+            banner.pack(fill="x", padx=14, pady=(8, 0))
+
+        ctk.CTkLabel(
+            banner,
+            text=f"⚠️ 일부 핵심 모듈을 불러오지 못했습니다: {module_list}",
+            font=self.build_ui_font(13, "bold"),
+            text_color=("#991B1B", "#FCA5A5"),
+            wraplength=700,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=12)
+
+        self.missing_module_banner = banner
+        self.log(f"경고: 다음 필수 모듈을 불러오지 못했습니다 — {module_list}")
 
     def update_windows_startup_ui_state(self):
         """현재 플랫폼에 맞게 Windows 자동 실행 UI를 조정한다."""
