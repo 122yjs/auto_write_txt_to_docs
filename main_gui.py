@@ -2415,7 +2415,7 @@ class MessengerDocsApp:
             pystray.MenuItem('감시 일시 정지/재개', self.toggle_monitoring_from_tray),
             pystray.MenuItem('Docs 웹에서 열기', self.open_docs_in_browser_from_tray),
             pystray.MenuItem('로그 보기', self.show_log_popup_from_tray),
-            pystray.MenuItem('종료', self.exit_application),
+            pystray.MenuItem('종료', lambda: self.exit_application(skip_save_check=True)),
         )
 
     def setup_tray_icon(self):
@@ -2576,8 +2576,10 @@ class MessengerDocsApp:
         """ 메인 창 숨기기 """
         if not self.tray_icon:
             self.log("트레이 아이콘이 없어 창 숨김 대신 종료를 진행합니다.")
-            self.exit_application()
+            self.exit_application(skip_save_check=False)
             return
+        if self.settings_changed and not self.is_monitoring:
+            self.log("알림: 저장되지 않은 설정이 있습니다. 트레이 '종료' 시 자동 저장됩니다.")
         self.root.withdraw()
         self.log("창 숨김. 트레이 아이콘 우클릭으로 메뉴 사용.")
 
@@ -2592,8 +2594,13 @@ class MessengerDocsApp:
             if self.root.state() == 'withdrawn': self.root.after(0, self.show_window)
             else: self.root.after(0, self.hide_window)
 
-    def exit_application(self, *args): # 트레이 메뉴 '종료'에서 호출됨
-        """ 애플리케이션 완전 종료 """
+    def exit_application(self, *args, skip_save_check=False): # 트레이 메뉴 '종료'에서 호출됨
+        """ 애플리케이션 완전 종료
+        
+        Args:
+            skip_save_check: True이면 미저장 설정을 확인 없이 자동 저장 (트레이 종료).
+                             False이면 사용자에게 저장/버리기/취소 선택권 부여 (GUI 종료).
+        """
         self.log("애플리케이션 종료 시작...")
 
         if getattr(self, "result_popup_presenter", None):
@@ -2624,13 +2631,43 @@ class MessengerDocsApp:
             self.log("감시 스레드 중지 시도 완료.")
         self.is_monitoring = False # 확실히 상태 업데이트
 
-        # 3. 설정 자동 저장 (변경사항이 있는 경우)
+        # 3. 미저장 설정 처리
         if hasattr(self, 'settings_changed') and self.settings_changed:
-            try:
-                self.save_config()
-                self.log("종료 시 설정 자동 저장 완료.")
-            except Exception as e:
-                self.log(f"종료 시 설정 저장 실패: {e}")
+            if skip_save_check:
+                # 트레이 종료: 확인 없이 자동 저장
+                try:
+                    self.save_config()
+                    self.log("종료 시 설정 자동 저장 완료.")
+                except Exception as e:
+                    self.log(f"종료 시 설정 저장 실패: {e}")
+            else:
+                # GUI 종료: 사용자에게 선택권 부여
+                try:
+                    if self.root.state() == 'withdrawn':
+                        self.root.deiconify()
+                    answer = messagebox.askyesnocancel(
+                        "설정 저장 확인",
+                        "저장되지 않은 설정 변경사항이 있습니다.\n\n"
+                        "저장하시겠습니까?\n"
+                        "• 예: 저장 후 종료\n"
+                        "• 아니오: 저장하지 않고 종료\n"
+                        "• 취소: 종료 취소",
+                        parent=self.root,
+                    )
+                    if answer is None:  # 취소
+                        self.log("종료 취소됨 (미저장 설정 보존)")
+                        # 트레이 아이콘이 이미 중지되었으므로 다시 시작
+                        if self.icon_image:
+                            self.setup_tray_icon()
+                            self.start_tray_icon()
+                        return
+                    if answer:  # 예
+                        self.save_config()
+                        self.log("종료 시 설정 저장 완료.")
+                    else:  # 아니오
+                        self.log("종료 시 설정 변경사항 버림.")
+                except Exception as e:
+                    self.log(f"종료 시 설정 저장 확인 중 오류: {e}")
         
         # 4. 메인 창 종료 (모든 백그라운드 작업 정리 후)
         self.log("메인 창 종료 시도...")
@@ -4307,7 +4344,7 @@ class MessengerDocsApp:
         )
         settings_menu.add_command(label="새 버전 확인", command=self.check_for_updates)
         settings_menu.add_separator()
-        settings_menu.add_command(label="프로그램 종료", command=self.exit_application)
+        settings_menu.add_command(label="프로그램 종료", command=lambda: self.exit_application(skip_save_check=False))
 
         menubar.add_cascade(label="설정", menu=settings_menu)
 
