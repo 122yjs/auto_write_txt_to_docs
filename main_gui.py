@@ -670,14 +670,22 @@ class MessengerDocsApp:
     def run_startup_prompts(self):
         """메인 창이 그려진 뒤 초기 안내 대화상자를 순차적으로 표시한다."""
         if self.first_run.get():
+            # 첫 실행 마법사가 인증 확인과 업데이트 확인까지 통합 처리
             self.root.after(400, self.show_first_run_wizard)
             return
 
         self.check_credentials_file()
+        # 도움말과 업데이트 확인을 하나의 흐름으로 통합
+        self.root.after(400, self._show_post_startup_prompts)
+
+    def _show_post_startup_prompts(self):
+        """첫 실행이 아닐 때, 도움말과 업데이트 확인을 순차적으로 실행한다."""
         if self.show_help_on_startup.get():
-            self.root.after(400, self.show_help_dialog)
+            self.show_help_dialog()
         if self.check_updates_on_startup.get():
-            self.root.after(900, lambda: self.check_for_updates_async(user_initiated=False))
+            # 도움말이 표시된 경우 잠시 지연 후 실행
+            delay = 600 if self.show_help_on_startup.get() else 0
+            self.root.after(delay, lambda: self.check_for_updates_async(user_initiated=False))
 
     def open_release_page(self, release_url=None):
         """공식 릴리즈 페이지를 기본 브라우저로 연다."""
@@ -3486,6 +3494,10 @@ class MessengerDocsApp:
             self.log("첫 실행 설정 마법사 완료.")
             self.first_run_wizard = None
             wizard.destroy()
+            # 마법사 완료 후 인증 파일 확인 및 업데이트 확인을 순차 실행
+            self.root.after(300, self.check_credentials_file)
+            if self.check_updates_on_startup.get():
+                self.root.after(800, lambda: self.check_for_updates_async(user_initiated=False))
 
         def update_step():
             step_data = (
