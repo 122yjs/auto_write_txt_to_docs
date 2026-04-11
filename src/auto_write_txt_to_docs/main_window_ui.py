@@ -741,6 +741,24 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         "현재 토큰을 격리 보관하고 다음 연결부터 새 인증을 사용하도록 초기화합니다.",
     )
 
+    test_connection_button = ctk.CTkButton(
+        auth_row,
+        text="연결 테스트",
+        command=callbacks["test_google_connection"],
+        width=100,
+        height=34,
+        corner_radius=12,
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("#E8F5E9", "#1B5E20"),
+        hover_color=("#C8E6C9", "#2E7D32"),
+        text_color=("#1B5E20", "#A5D6A7"),
+    )
+    test_connection_button.pack(side="right")
+    _attach_tooltip(
+        test_connection_button,
+        "Google Docs 연결이 정상적으로 동작하는지 미리 확인합니다.",
+    )
+
     return {
         "open_docs_button": open_docs_button,
         "backup_restore_button": backup_restore_button,
@@ -748,6 +766,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         "save_button": save_button,
         "reauth_button": reauth_button,
         "reset_auth_button": reset_auth_button,
+        "test_connection_button": test_connection_button,
     }
 
 

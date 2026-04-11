@@ -1709,6 +1709,7 @@ class MessengerDocsApp:
             "create_doc": "새 문서 만들기",
             "select_doc": "문서 목록 조회",
             "manual_reauth": "Google 계정 다시 연결",
+            "connection_test": "인증 연결 테스트",
         }
         return purpose_map.get(purpose, "Google 작업")
 
@@ -1930,6 +1931,27 @@ class MessengerDocsApp:
                 "격리할 기존 토큰이 없습니다. 필요하면 'Google 계정 다시 연결'을 사용하세요.",
                 parent=self.root,
             )
+
+    def test_google_connection(self):
+        """감시 시작 전에 Google Docs 연결이 정상인지 미리 확인한다."""
+        self.begin_google_service_request(
+            purpose="connection_test",
+            require_drive=False,
+            on_success=self._on_connection_test_success,
+        )
+
+    def _on_connection_test_success(self, google_services):
+        """연결 테스트 성공 시 안내를 표시한다."""
+        self.google_auth_operation_in_progress = False
+        if hasattr(self, "google_connection_status_var"):
+            self.google_connection_status_var.set("✅ 연결 확인됨")
+        self.update_status("준비", "Google 연결 테스트 성공")
+        self.update_monitoring_action_ui()
+        messagebox.showinfo(
+            "연결 테스트 성공",
+            "Google Docs 서비스에 정상적으로 연결되었습니다.\n감시를 시작할 수 있습니다.",
+            parent=self.root,
+        )
 
     def prompt_google_reauthentication(self):
         """사용자 요청으로 Google 계정을 다시 연결한다."""
@@ -2323,6 +2345,7 @@ class MessengerDocsApp:
                 "validate_positive_integer_input": self.validate_positive_integer_input,
                 "toggle_advanced_settings": self.toggle_advanced_settings,
                 "on_activity_tab_changed": self.on_activity_tab_changed,
+                "test_google_connection": self.test_google_connection,
             },
             ctk_module=ctk,
             font_family=self.ui_font_family,
