@@ -248,16 +248,16 @@ def remember_file_lines(filepath, lines, source_filename=None):
 
 
 def remember_global_lines(lines):
-    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다."""
+    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다. 키는 SHA256 해시를 사용합니다."""
     if not lines:
         return
 
     for line in lines:
-        normalized_line = str(line)
-        if normalized_line in added_lines_cache:
-            added_lines_cache.move_to_end(normalized_line)
+        h = hash_line_for_dedupe(line)
+        if h in added_lines_cache:
+            added_lines_cache.move_to_end(h)
         else:
-            added_lines_cache[normalized_line] = None
+            added_lines_cache[h] = line
 
     optimize_cache_size(None)
 
@@ -552,6 +552,9 @@ def load_line_cache(log_func):
             added_lines_cache = OrderedDict()
             if isinstance(loaded_lines, list):
                 remember_global_lines(loaded_lines)
+            elif isinstance(loaded_lines, dict):
+                for h, line in loaded_lines.items():
+                    added_lines_cache[str(h)] = str(line)
             log_func(f"백엔드: 라인 캐시({cache_path}) 로드됨 ({len(added_lines_cache)}개).")
             
             # 캐시 크기 제한 (메모리 최적화)
@@ -579,7 +582,7 @@ def optimize_cache_size(log_func):
         log_func(f"백엔드: 라인 캐시 크기 최적화 - 가장 오래된 {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
         try:
             with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False)
+                json.dump(dict(added_lines_cache), f, ensure_ascii=False)
             log_func("백엔드: 최적화된 라인 캐시 저장 완료")
         except Exception as e:
             log_func(f"경고: 최적화된 라인 캐시 저장 실패 - {e}")
@@ -589,7 +592,7 @@ def save_line_cache(log_func):
     log_func(f"백엔드: 라인 캐시 저장 시도 ({len(added_lines_cache)}개)...")
     try:
         with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False, indent=4)
+            json.dump(dict(added_lines_cache), f, ensure_ascii=False, indent=4)
         log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
@@ -800,9 +803,10 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         global added_lines_cache
         file_seen_hashes = get_file_seen_hashes(filepath)
         should_record_duplicate_file_marker = last_byte_offset == 0 and not file_seen_hashes
+        line_hashes = {line: hash_line_for_dedupe(line) for line in new_lines}
         truly_new_lines = [
             line for line in new_lines
-            if line not in added_lines_cache and hash_line_for_dedupe(line) not in file_seen_hashes
+            if line_hashes[line] not in added_lines_cache and line_hashes[line] not in file_seen_hashes
         ]
 
         if not truly_new_lines: # 추가할 새 라인 없음

@@ -172,7 +172,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.remember_global_lines(["둘줄", "넷줄"])
 
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "둘줄", "넷줄"],
         )
 
@@ -181,7 +181,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.load_line_cache(lambda _message: None)
 
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "둘줄", "넷줄"],
         )
 
@@ -199,7 +199,7 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(configured_size, 2)
         self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, 2)
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "넷줄"],
         )
         self.assertTrue(any("라인 캐시 최대 크기 설정 - 2개" in message for message in logs))
@@ -314,7 +314,7 @@ class BackendProcessorTests(unittest.TestCase):
             backend_processor.hash_line_for_dedupe("정상 처리 테스트"),
             state["seen_line_hashes"],
         )
-        self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
+        self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache.values())
         self.assertEqual(len(fake_docs_service.calls), 1)
         inserted_text = fake_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
         self.assertIn("본래 파일 제목:", inserted_text)
@@ -361,6 +361,14 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
         with open(filepath, "a", encoding="utf-8", newline="") as source_file:
             source_file.write("같은 줄\n")
+
+        current_stat = os.stat(filepath)
+        backend_processor.processed_file_states[filepath]["file_ctime_ns"] = int(
+            getattr(current_stat, 'st_ctime_ns', int(current_stat.st_ctime * 1_000_000_000))
+        )
+        backend_processor.processed_file_states[filepath]["file_mtime_ns"] = int(
+            getattr(current_stat, 'st_mtime_ns', int(current_stat.st_mtime * 1_000_000_000))
+        )
 
         logs = []
         second_docs_service = FakeDocsService()
@@ -480,6 +488,14 @@ class BackendProcessorTests(unittest.TestCase):
 
         with open(filepath, "w", encoding="utf-8", newline="") as f:
             f.write("같은 줄\n같은 줄\n")
+
+        current_stat = os.stat(filepath)
+        backend_processor.processed_file_states[filepath]["file_ctime_ns"] = int(
+            getattr(current_stat, 'st_ctime_ns', int(current_stat.st_ctime * 1_000_000_000))
+        )
+        backend_processor.processed_file_states[filepath]["file_mtime_ns"] = int(
+            getattr(current_stat, 'st_mtime_ns', int(current_stat.st_mtime * 1_000_000_000))
+        )
 
         second_logs = []
         second_docs_service = FakeDocsService()
