@@ -227,15 +227,24 @@ def get_file_seen_hashes(filepath):
         return seen_hashes
 
 
-def remember_file_lines(filepath, lines):
-    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다."""
+def remember_file_lines(filepath, lines, source_filename=None):
+    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다. 출처도 함께 기록합니다."""
     if not lines:
         return
 
+    source = source_filename or os.path.basename(filepath)
     with processed_state_lock:
+        state = get_file_state(filepath)
         seen_hashes = get_file_seen_hashes(filepath)
+        provenance = state.setdefault('provenance', {})
+
         for line in lines:
-            seen_hashes.add(hash_line_for_dedupe(line))
+            h = hash_line_for_dedupe(line)
+            seen_hashes.add(h)
+            if h not in provenance:
+                provenance[h] = []
+            if source not in provenance[h]:
+                provenance[h].append(source)
 
 
 def remember_global_lines(lines):
@@ -286,6 +295,7 @@ def reset_file_processing_state(filepath):
         state.pop('retry_scheduled', None)
         state.pop('file_ctime_ns', None)
         state.pop('file_mtime_ns', None)
+        state.pop('provenance', None)
         state['seen_line_hashes'] = set()
         if 'timestamp' in state:
             del state['timestamp']
@@ -358,6 +368,13 @@ def _build_serializable_processed_state():
     with processed_state_lock:
         serializable_state = {}
         for filepath, state in processed_file_states.items():
+            serializable_provenance = {}
+            prov = state.get('provenance', {})
+            if isinstance(prov, dict):
+                for h, sources in prov.items():
+                    if isinstance(sources, (list, set, tuple)):
+                        serializable_provenance[str(h)] = sorted(str(s) for s in sources if s)
+
             serializable_state[filepath] = {
                 'last_byte_offset': int(state.get('last_byte_offset', state.get('size', 0))),
                 'size': int(state.get('last_byte_offset', state.get('size', 0))),
@@ -367,6 +384,7 @@ def _build_serializable_processed_state():
                 ),
                 'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
                 'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
+                'provenance': serializable_provenance,
             }
         return serializable_state
 
@@ -471,6 +489,13 @@ def load_processed_state(log_func):
             except (TypeError, ValueError):
                 last_attempt_time = 0
 
+            provenance = state.get('provenance', {})
+            sanitized_provenance = {}
+            if isinstance(provenance, dict):
+                for h, sources in provenance.items():
+                    if isinstance(sources, (list, set, tuple)):
+                        sanitized_provenance[str(h)] = [str(s) for s in sources if s]
+
             sanitized_state[filepath] = {
                 'last_byte_offset': byte_offset,
                 'size': byte_offset,
@@ -481,6 +506,7 @@ def load_processed_state(log_func):
                 'retry_scheduled': False,
                 'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
                 'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
+                'provenance': sanitized_provenance,
             }
 
         with processed_state_lock:

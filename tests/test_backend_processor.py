@@ -567,5 +567,103 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertTrue(any("브라우저 인증을 시작하지 않습니다" in message for message in logs))
 
 
+class TestProvenanceTracking(unittest.TestCase):
+    """출처 추적(Provenance) 기능 테스트"""
+
+    def setUp(self):
+        backend_processor.processed_file_states = {}
+        backend_processor.file_encodings = {}
+
+    def test_remember_file_lines_records_provenance(self):
+        """remember_file_lines가 출처를 기록하는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A", "line B"],
+            source_filename="backup-2026-03-18_130726.txt"
+        )
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+        prov = state.get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+        hash_b = backend_processor.hash_line_for_dedupe("line B")
+
+        self.assertIn(hash_a, prov)
+        self.assertIn(hash_b, prov)
+        self.assertEqual(prov[hash_a], ["backup-2026-03-18_130726.txt"])
+        self.assertEqual(prov[hash_b], ["backup-2026-03-18_130726.txt"])
+
+    def test_remember_file_lines_appends_multiple_sources(self):
+        """동일 라인이 여러 출처에서 발견되면 출처 목록이 누적되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-B.txt"
+        )
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+        prov = state.get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertEqual(prov[hash_a], ["backup-A.txt", "backup-B.txt"])
+
+    def test_reset_file_processing_state_clears_provenance(self):
+        """파일 재생성 시 provenance가 초기화되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        backend_processor.reset_file_processing_state("/tmp/test.txt")
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+
+        self.assertNotIn("provenance", state)
+        self.assertEqual(state.get("seen_line_hashes"), set())
+
+    def test_build_serializable_processed_state_includes_provenance(self):
+        """직렬화 시 provenance가 포함되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        serializable = backend_processor._build_serializable_processed_state()
+        prov = serializable.get("/tmp/test.txt", {}).get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertIn(hash_a, prov)
+        self.assertEqual(prov[hash_a], ["backup-A.txt"])
+
+    def test_load_processed_state_restores_provenance(self):
+        """로드 시 provenance가 복원되는지 확인"""
+        raw_state = {
+            "/tmp/test.txt": {
+                "last_byte_offset": 100,
+                "seen_line_hashes": [],
+                "provenance": {
+                    "abc123": ["backup-A.txt", "backup-B.txt"]
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(raw_state, f)
+            temp_path = f.name
+
+        original_path = backend_processor.PROCESSED_STATE_FILE
+        backend_processor.PROCESSED_STATE_FILE = temp_path
+        try:
+            backend_processor.load_processed_state(lambda msg: None)
+            state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+            prov = state.get("provenance", {})
+
+            self.assertIn("abc123", prov)
+            self.assertEqual(prov["abc123"], ["backup-A.txt", "backup-B.txt"])
+        finally:
+            backend_processor.PROCESSED_STATE_FILE = original_path
+            os.unlink(temp_path)
+
+
 if __name__ == "__main__":
     unittest.main()
