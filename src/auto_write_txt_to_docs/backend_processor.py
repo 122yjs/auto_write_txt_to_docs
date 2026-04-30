@@ -83,6 +83,7 @@ def setup_backend_logging():
 # 라인 캐시 관련 설정
 added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
 duplicate_stats = {}
+block_dedupe_cache = OrderedDict()
 LINE_CACHE_FILE = CACHE_FILE_STR
 DUPLICATE_STATS_FILE = DUPLICATE_STATS_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
@@ -279,6 +280,21 @@ def remember_global_lines(lines):
                 duplicate_stats[h]["last_seen_at"] = current_time
 
     optimize_cache_size(None)
+
+
+def remember_global_blocks(blocks):
+    if not blocks:
+        return
+    for block in blocks:
+        fp = block.get_fingerprint()
+        if fp in block_dedupe_cache:
+            block_dedupe_cache.move_to_end(fp)
+        else:
+            block_dedupe_cache[fp] = block
+
+
+def get_new_blocks(blocks):
+    return [b for b in blocks if b.get_fingerprint() not in block_dedupe_cache]
 
 
 def get_last_attempt_time(filepath):
@@ -859,6 +875,61 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
+            return
+
+        # --- 2. 콘텐츠 파싱 모드 분기 ---
+        parsing_mode = config.get('content_parsing_mode', 'line')
+
+        if parsing_mode == 'block':
+            try:
+                from .block_parser import StructuredBlockParser
+            except ImportError:
+                from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+            block_separator = config.get('block_separator', '-------------------------------------------------------------------------------')
+            field_patterns = config.get('field_patterns', {})
+            parser = StructuredBlockParser(
+                block_separator=block_separator,
+                field_patterns=field_patterns,
+            )
+            blocks = parser.parse(new_raw_content, source_file=filepath)
+            valid_blocks = [b for b in blocks if parser.validate_block(b)[0]]
+            new_blocks = get_new_blocks(valid_blocks)
+
+            if not new_blocks:
+                log_func(f"  - 중복 블록만 감지되어 Google Docs 기록 생략 (파일: {os.path.basename(filepath)})")
+                remember_global_blocks(valid_blocks)
+                mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
+                schedule_processed_state_save(log_func)
+                return
+
+            block_texts = [b.raw_text for b in new_blocks]
+            extraction_record = build_extraction_record(filepath, block_texts)
+            text_to_insert = extraction_record['document_text']
+
+            log_func(f"  - Google Docs에 {len(new_blocks)}개 블록 추가 시도 (파일: {os.path.basename(filepath)})...")
+            try:
+                requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': text_to_insert}}]
+                docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
+                log_func(f"  - Google Docs 업데이트 완료 (파일: {os.path.basename(filepath)}, {len(new_blocks)}개 블록 추가)")
+                backend_logger.info(f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(new_blocks)}개 블록 추가")
+            except HttpError as error:
+                log_func(f"오류: Docs 업데이트 API 오류 - {error}")
+                backend_logger.error(f"Docs 업데이트 API 오류: {error}")
+                schedule_retry(filepath, log_func, "Google Docs API 오류", current_time)
+                return
+            except Exception as e:
+                log_func(f"오류: Docs 업데이트 중 예외 발생 - {e}")
+                backend_logger.error(f"Docs 업데이트 중 예외 발생: {e}", exc_info=True)
+                log_func(traceback.format_exc())
+                schedule_retry(filepath, log_func, "Google Docs 업데이트 예외", current_time)
+                return
+
+            remember_global_blocks(valid_blocks)
+            mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
+            schedule_processed_state_save(log_func)
+            log_func(f"처리 완료: {os.path.basename(filepath)}")
+            backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]

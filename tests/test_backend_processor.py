@@ -740,5 +740,62 @@ class TestDuplicateStats(unittest.TestCase):
             os.unlink(temp_path)
 
 
+class TestBlockLevelDeduplication(unittest.TestCase):
+    def setUp(self):
+        backend_processor.added_lines_cache.clear()
+        backend_processor.block_dedupe_cache.clear()
+
+    def test_block_mode_skips_duplicate_blocks(self):
+        content = (
+            "송신:이슬아\n"
+            "시간:2026-03-18 13:04:58:000\n"
+            "제목:감사합니다\n"
+            "내용:감사합니다\n"
+        )
+        filepath = os.path.join(tempfile.mkdtemp(), "block_test.txt")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        fake_docs = FakeDocsService()
+        backend_processor.process_file(
+            filepath,
+            {
+                "docs_id": "doc-block",
+                "content_parsing_mode": "block",
+                "block_separator": "-" * 15,
+                "field_patterns": {
+                    "sender": "^송신:(.+)",
+                    "time": "^시간:(.+)",
+                    "title": "^제목:(.+)",
+                    "body": "^내용:(.+)",
+                },
+            },
+            {"docs": fake_docs},
+            lambda _message: None,
+        )
+        self.assertEqual(len(fake_docs.calls), 1)
+
+        # Second run with same file content should skip docs
+        fake_docs2 = FakeDocsService()
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+        backend_processor.process_file(
+            filepath,
+            {
+                "docs_id": "doc-block",
+                "content_parsing_mode": "block",
+                "block_separator": "-" * 15,
+                "field_patterns": {
+                    "sender": "^송신:(.+)",
+                    "time": "^시간:(.+)",
+                    "title": "^제목:(.+)",
+                    "body": "^내용:(.+)",
+                },
+            },
+            {"docs": fake_docs2},
+            lambda _message: None,
+        )
+        self.assertEqual(len(fake_docs2.calls), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
