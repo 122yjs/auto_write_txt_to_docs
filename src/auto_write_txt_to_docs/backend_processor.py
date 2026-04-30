@@ -25,6 +25,7 @@ except ImportError:
 try:
     from .path_utils import (
         CACHE_FILE_STR,
+        DUPLICATE_STATS_FILE_STR,
         LEGACY_CACHE_FILE_STR,
         LOG_DIR_STR,
         PROCESSED_STATE_FILE_STR,
@@ -32,6 +33,7 @@ try:
 except ImportError:
     project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
+    DUPLICATE_STATS_FILE_STR = os.path.join(project_root_fallback, "duplicate_stats.json")
     LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
     LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
     PROCESSED_STATE_FILE_STR = os.path.join(project_root_fallback, "processed_state.json")
@@ -80,7 +82,9 @@ def setup_backend_logging():
 
 # 라인 캐시 관련 설정
 added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
+duplicate_stats = {}
 LINE_CACHE_FILE = CACHE_FILE_STR
+DUPLICATE_STATS_FILE = DUPLICATE_STATS_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
 
@@ -252,12 +256,27 @@ def remember_global_lines(lines):
     if not lines:
         return
 
+    current_time = time.time()
     for line in lines:
         h = hash_line_for_dedupe(line)
         if h in added_lines_cache:
             added_lines_cache.move_to_end(h)
+            if h in duplicate_stats:
+                duplicate_stats[h]["total_occurrences"] += 1
+                duplicate_stats[h]["last_seen_at"] = current_time
         else:
             added_lines_cache[h] = line
+            if h not in duplicate_stats:
+                preview = line[:80] + "..." if len(line) > 80 else line
+                duplicate_stats[h] = {
+                    "line_preview": preview,
+                    "total_occurrences": 1,
+                    "first_seen_at": current_time,
+                    "last_seen_at": current_time,
+                }
+            else:
+                duplicate_stats[h]["total_occurrences"] += 1
+                duplicate_stats[h]["last_seen_at"] = current_time
 
     optimize_cache_size(None)
 
@@ -274,6 +293,24 @@ def get_last_successful_offset(filepath):
     with processed_state_lock:
         state = processed_file_states.get(filepath, {})
     return state.get('last_byte_offset', state.get('size', 0))
+
+
+def get_top_duplicate_lines(limit=10):
+    sorted_stats = sorted(
+        duplicate_stats.items(),
+        key=lambda item: item[1]["total_occurrences"],
+        reverse=True,
+    )
+    return [
+        {
+            "hash": h,
+            "line_preview": stat["line_preview"],
+            "total_occurrences": stat["total_occurrences"],
+            "first_seen_at": stat["first_seen_at"],
+            "last_seen_at": stat["last_seen_at"],
+        }
+        for h, stat in sorted_stats[:limit]
+    ]
 
 
 def mark_processing_attempt(filepath, current_time):
@@ -596,6 +633,38 @@ def save_line_cache(log_func):
         log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
+
+def load_duplicate_stats(log_func):
+    global duplicate_stats
+    stats_path = DUPLICATE_STATS_FILE
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                duplicate_stats = loaded
+                log_func(f"백엔드: 중복 통계({stats_path}) 로드됨 ({len(duplicate_stats)}개).")
+            else:
+                log_func(f"경고: 중복 통계 파일 형식이 잘못됨. 빈 통계로 시작.")
+                duplicate_stats = {}
+        except Exception as e:
+            log_func(f"경고: 중복 통계 로드 실패 - {e}")
+            duplicate_stats = {}
+    else:
+        log_func(f"백엔드: 중복 통계 파일({stats_path}) 없음. 새로 시작합니다.")
+        duplicate_stats = {}
+
+def save_duplicate_stats(log_func):
+    log_func(f"백엔드: 중복 통계 저장 시도 ({len(duplicate_stats)}개)...")
+    try:
+        target_dir = os.path.dirname(DUPLICATE_STATS_FILE)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        with open(DUPLICATE_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(duplicate_stats, f, ensure_ascii=False, indent=4)
+        log_func(f"백엔드: 중복 통계 저장 완료 ({DUPLICATE_STATS_FILE}).")
+    except Exception as e:
+        log_func(f"오류: 중복 통계 저장 실패 - {e}")
 
 # --- 파일 읽기 헬퍼 함수 ---
 def read_file_with_multiple_encodings(filepath, start_byte_offset, log_func):

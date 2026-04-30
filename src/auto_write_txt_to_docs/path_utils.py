@@ -130,6 +130,7 @@ PROJECT_ROOT = get_project_root()
 # 현재 사용 경로
 CONFIG_FILE = get_safe_config_path("config.json", use_user_dir=True)  # 설정 파일은 사용자 폴더에
 CACHE_FILE = get_safe_cache_path("added_lines_cache.json", use_user_dir=True)  # 라인 캐시 파일
+DUPLICATE_STATS_FILE = get_safe_cache_path("duplicate_stats.json", use_user_dir=True)  # 중복 통계 파일
 PROCESSED_STATE_FILE = get_safe_cache_path("processed_state.json", use_user_dir=True)  # 처리 상태 파일
 LOG_DIR = get_log_dir()  # 로그는 사용자 설정 디렉토리 아래 logs 폴더 사용
 
@@ -141,6 +142,7 @@ LEGACY_CACHE_FILE = PROJECT_ROOT / "added_lines_cache.json"
 PROJECT_ROOT_STR = str(PROJECT_ROOT)
 CONFIG_FILE_STR = str(CONFIG_FILE)
 CACHE_FILE_STR = str(CACHE_FILE)
+DUPLICATE_STATS_FILE_STR = str(DUPLICATE_STATS_FILE)
 PROCESSED_STATE_FILE_STR = str(PROCESSED_STATE_FILE)
 LOG_DIR_STR = str(LOG_DIR)
 LEGACY_CONFIG_FILE_STR = str(LEGACY_CONFIG_FILE)

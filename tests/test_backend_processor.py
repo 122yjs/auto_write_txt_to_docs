@@ -681,5 +681,64 @@ class TestProvenanceTracking(unittest.TestCase):
             os.unlink(temp_path)
 
 
+
+class TestDuplicateStats(unittest.TestCase):
+    def setUp(self):
+        backend_processor.added_lines_cache.clear()
+        backend_processor.duplicate_stats.clear()
+
+    def test_remember_global_lines_tracks_duplicate_stats(self):
+        backend_processor.remember_global_lines(["line A", "line B"])
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+        hash_b = backend_processor.hash_line_for_dedupe("line B")
+
+        self.assertIn(hash_a, backend_processor.duplicate_stats)
+        self.assertIn(hash_b, backend_processor.duplicate_stats)
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["total_occurrences"], 1)
+        self.assertEqual(backend_processor.duplicate_stats[hash_b]["total_occurrences"], 1)
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["line_preview"], "line A")
+
+    def test_remember_global_lines_increments_existing_stats(self):
+        backend_processor.remember_global_lines(["line A"])
+        backend_processor.remember_global_lines(["line A"])
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["total_occurrences"], 2)
+
+    def test_get_top_duplicate_lines_returns_sorted_list(self):
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["rare"])
+        backend_processor.remember_global_lines(["rare"])
+
+        top = backend_processor.get_top_duplicate_lines(limit=2)
+        self.assertEqual(len(top), 2)
+        self.assertEqual(top[0]["line_preview"], "common")
+        self.assertEqual(top[0]["total_occurrences"], 3)
+        self.assertEqual(top[1]["line_preview"], "rare")
+        self.assertEqual(top[1]["total_occurrences"], 2)
+
+    def test_save_and_load_duplicate_stats(self):
+        backend_processor.remember_global_lines(["persisted line"])
+        hash_val = backend_processor.hash_line_for_dedupe("persisted line")
+        original_stats = dict(backend_processor.duplicate_stats)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(original_stats, f)
+            temp_path = f.name
+
+        backend_processor.duplicate_stats.clear()
+        original_path = backend_processor.DUPLICATE_STATS_FILE
+        backend_processor.DUPLICATE_STATS_FILE = temp_path
+        try:
+            backend_processor.load_duplicate_stats(lambda msg: None)
+            self.assertIn(hash_val, backend_processor.duplicate_stats)
+            self.assertEqual(backend_processor.duplicate_stats[hash_val]["total_occurrences"], 1)
+        finally:
+            backend_processor.DUPLICATE_STATS_FILE = original_path
+            os.unlink(temp_path)
+
+
 if __name__ == "__main__":
     unittest.main()
