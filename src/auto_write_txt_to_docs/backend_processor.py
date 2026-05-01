@@ -38,6 +38,11 @@ except ImportError:
     LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
     PROCESSED_STATE_FILE_STR = os.path.join(project_root_fallback, "processed_state.json")
 
+try:
+    from .dual_output import get_dual_output_manager
+except ImportError:
+    from src.auto_write_txt_to_docs.dual_output import get_dual_output_manager
+
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
 processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트 오프셋, 최근 시도 시간) - 메모리 기반
@@ -815,13 +820,16 @@ class FileEventHandler(FileSystemEventHandler):
     def on_modified(self, event): self.process(event)
 
 # --- 핵심 파일 처리 함수 (Docs 기록 버전) ---
-def process_file(filepath, config, services, log_func, extracted_result_callback=None, event_type=None):
+def process_file(filepath, config, services, log_func, extracted_result_callback=None, event_type=None, dual_output_manager=None):
     """ 감지된 파일을 읽고, 중복 제거 후 Google Docs에 기록 """
     # 백엔드 로거 가져오기
     backend_logger = logging.getLogger('backend_processor')
     # 필요한 서비스 및 설정 가져오기
     docs_service = services.get('docs') if services else None
     docs_id = config.get('docs_id')
+
+    if dual_output_manager is None and config:
+        dual_output_manager = get_dual_output_manager(config)
 
     try:
         # --- 1. 새로운 내용 식별 ---
@@ -873,6 +881,12 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
+        if dual_output_manager:
+            try:
+                dual_output_manager.write_raw(filepath, new_lines)
+                dual_output_manager.write_deduped(filepath, truly_new_lines, len(new_lines) - len(truly_new_lines))
+            except Exception as e:
+                backend_logger.warning(f"이중 출력 저장 실패: {e}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
             return
