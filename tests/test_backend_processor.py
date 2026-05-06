@@ -88,6 +88,25 @@ class FakeDocsService:
         return {}
 
 
+class FakeDualOutputManager:
+    def __init__(self):
+        self.raw_calls = []
+        self.deduped_calls = []
+        self.html_calls = []
+
+    def write_raw(self, filepath, lines):
+        self.raw_calls.append((filepath, list(lines)))
+
+    def write_deduped(self, filepath, lines, duplicate_count=0):
+        self.deduped_calls.append((filepath, list(lines), duplicate_count))
+
+    def generate_html(self, date_str=None, log_func=None):
+        self.html_calls.append(date_str)
+        if log_func:
+            log_func("HTML 리포트 생성 완료: fake-report.html")
+        return "fake-report.html"
+
+
 class BackendProcessorTests(unittest.TestCase):
     def setUp(self):
         logging.disable(logging.CRITICAL)
@@ -323,6 +342,27 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(extracted_results[0]["file_title"], os.path.basename(filepath))
         self.assertIn("정상 처리 테스트", extracted_results[0]["full_text"])
         self.assertTrue(any("처리 완료" in message for message in logs))
+
+    def test_dual_output_enabled_does_not_skip_docs_update(self):
+        filepath = self.create_temp_file("원본 줄\n중복 줄\n")
+        logs = []
+        fake_docs_service = FakeDocsService()
+        dual_output = FakeDualOutputManager()
+        backend_processor.remember_global_lines(["중복 줄"])
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-dual", "dual_output_enabled": True},
+            {"docs": fake_docs_service},
+            logs.append,
+            dual_output_manager=dual_output,
+        )
+
+        self.assertEqual(len(fake_docs_service.calls), 1)
+        self.assertEqual(dual_output.raw_calls[0][1], ["원본 줄", "중복 줄"])
+        self.assertEqual(dual_output.deduped_calls[0][1], ["원본 줄"])
+        self.assertEqual(dual_output.deduped_calls[0][2], 1)
+        self.assertEqual(len(dual_output.html_calls), 1)
 
     def test_duplicate_only_new_file_records_filename_to_docs(self):
         filepath = self.create_temp_file("중복 줄\n")
@@ -774,6 +814,9 @@ class TestBlockLevelDeduplication(unittest.TestCase):
             lambda _message: None,
         )
         self.assertEqual(len(fake_docs.calls), 1)
+        inserted_text = fake_docs.calls[0][1]["requests"][0]["insertText"]["text"]
+        self.assertNotIn("제목:감사합니다", inserted_text)
+        self.assertIn("내용:감사합니다", inserted_text)
 
         # Second run with same file content should skip docs
         fake_docs2 = FakeDocsService()

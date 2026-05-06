@@ -43,6 +43,11 @@ try:
 except ImportError:
     from src.auto_write_txt_to_docs.dual_output import get_dual_output_manager
 
+try:
+    from .flexible_dedup import get_flexible_strategy
+except ImportError:
+    from src.auto_write_txt_to_docs.flexible_dedup import get_flexible_strategy
+
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
 processed_file_states = {} # 파일별 마지막 처리 상태 (성공 바이트 오프셋, 최근 시도 시간) - 메모리 기반
@@ -166,6 +171,17 @@ def build_duplicate_only_record(filepath, duplicate_line_count, extracted_at=Non
         'document_text': document_marker,
         'duplicate_only': True,
     }
+
+
+def write_dual_output_files(dual_output_manager, filepath, raw_lines, deduped_lines, log_func=None):
+    """raw/deduped/html 로컬 산출물을 한 번에 저장합니다."""
+    if not dual_output_manager:
+        return None
+
+    duplicate_count = max(0, len(raw_lines) - len(deduped_lines))
+    dual_output_manager.write_raw(filepath, raw_lines)
+    dual_output_manager.write_deduped(filepath, deduped_lines, duplicate_count)
+    return dual_output_manager.generate_html(log_func=log_func)
 
 
 def get_file_state(filepath):
@@ -881,15 +897,6 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
-        if dual_output_manager:
-            try:
-                dual_output_manager.write_raw(filepath, new_lines)
-                dual_output_manager.write_deduped(filepath, truly_new_lines, len(new_lines) - len(truly_new_lines))
-            except Exception as e:
-                backend_logger.warning(f"이중 출력 저장 실패: {e}")
-            mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
-            schedule_processed_state_save(log_func)
-            return
 
         # --- 2. 콘텐츠 파싱 모드 분기 ---
         parsing_mode = config.get('content_parsing_mode', 'line')
@@ -908,11 +915,18 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
             )
             blocks = parser.parse(new_raw_content, source_file=filepath)
             valid_blocks = [b for b in blocks if parser.validate_block(b)[0]]
-            new_blocks = get_new_blocks(valid_blocks)
+            flexible_strategy = get_flexible_strategy(config)
+            if flexible_strategy:
+                new_blocks = flexible_strategy.get_new_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                new_blocks = get_new_blocks(valid_blocks)
 
             if not new_blocks:
                 log_func(f"  - 중복 블록만 감지되어 Google Docs 기록 생략 (파일: {os.path.basename(filepath)})")
-                remember_global_blocks(valid_blocks)
+                if flexible_strategy:
+                    flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+                else:
+                    remember_global_blocks(valid_blocks)
                 mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
                 schedule_processed_state_save(log_func)
                 return
@@ -939,7 +953,21 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                 schedule_retry(filepath, log_func, "Google Docs 업데이트 예외", current_time)
                 return
 
-            remember_global_blocks(valid_blocks)
+            if flexible_strategy:
+                flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                remember_global_blocks(valid_blocks)
+            if dual_output_manager:
+                try:
+                    write_dual_output_files(
+                        dual_output_manager,
+                        filepath,
+                        [block.raw_text for block in valid_blocks],
+                        block_texts,
+                        log_func,
+                    )
+                except Exception as e:
+                    backend_logger.warning(f"이중 출력 저장 실패: {e}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
             log_func(f"처리 완료: {os.path.basename(filepath)}")
@@ -1014,6 +1042,11 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
 
             remember_global_lines(new_lines)
             remember_file_lines(filepath, new_lines)
+            if dual_output_manager:
+                try:
+                    write_dual_output_files(dual_output_manager, filepath, new_lines, [], log_func)
+                except Exception as e:
+                    backend_logger.warning(f"이중 출력 저장 실패: {e}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
             log_func(f"처리 완료: {os.path.basename(filepath)}")
@@ -1063,6 +1096,12 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
         remember_global_lines(new_lines)
         remember_file_lines(filepath, new_lines)
+
+        if dual_output_manager:
+            try:
+                write_dual_output_files(dual_output_manager, filepath, new_lines, truly_new_lines, log_func)
+            except Exception as e:
+                backend_logger.warning(f"이중 출력 저장 실패: {e}")
 
         if extracted_result_callback:
             try:

@@ -11,7 +11,7 @@ class ReleaseVersionMetadataTests(unittest.TestCase):
 
         pyproject_match = re.search(r'version = "([^"]+)"', pyproject_source)
         package_match = re.search(r"__version__ = '([^']+)'", package_init_source)
-        workflow_match = re.search(r"default: v([0-9]+\.[0-9]+\.[0-9]+)", workflow_source)
+        workflow_match = re.search(r"default: v([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?)", workflow_source)
 
         self.assertIsNotNone(pyproject_match)
         self.assertIsNotNone(package_match)

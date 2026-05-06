@@ -1,158 +1,64 @@
-# 릴리즈 노트 — v1.2.0-alpha
+# v1.2.0-alpha 릴리즈 노트
 
-> **릴리즈 타입**: Pre-release (Alpha)  
-> **브랜치**: `feat/deduplication-improvements`  
-> **기준 커밋**: `215b212`  
-> **배포 대상**: 개발자 및 고급 사용자
+v1.2.0-alpha는 “기능은 생겼는데 사용자는 어디서 쓰는지 모르는” 상태를 정리한 업데이트입니다. 로컬 산출물 저장, 중복 판정 옵션, 블록 단위 파싱을 이제 `config.json`을 직접 열지 않고 앱 화면에서 확인하고 바꿀 수 있습니다.
 
----
+## 사용자가 바로 볼 수 있는 변화
 
-## 개요
+- 상단 상태 영역에 현재 앱 버전이 표시됩니다.
+- `문서 작업` 영역에서 새 문서 만들기, 기존 문서 주소 입력, 문서 목록, `Docs 웹에서 열기`를 함께 사용할 수 있습니다.
+- `Google 계정 및 인증` 섹션이 새로 생겨 인증 설정 마법사, 계정 다시 연결, 연결 테스트, 인증 초기화를 한곳에서 찾을 수 있습니다.
+- `설정 저장`, 백업/복원, 테마 설정은 `앱 설정 관리`로 분리했습니다.
 
-**Phase 3 완료**: 이중 출력(Dual Output), 유연 중복 판정(Flexible Deduplication), SQLite 캐시 마이그레이션 기능이 추가되었습니다. 대용량 데이터 처리와 맞춤형 중복 판정이 가능해졌습니다.
+## 로컬 산출물 저장
 
-**⚠️ 주의**: Alpha 버전으로, 프로덕션 환경보다는 테스트 및 피드백 수집 용도로 사용해 주세요.
+로컬 산출물 저장은 기본으로 켜져 있습니다. 기본 저장 위치는 다음 폴더입니다.
 
----
-
-## Phase 3: 이중 출력 및 고급 중복 판정
-
-### 3.1 이중 출력 (Dual Output)
-
-- **파일**: `src/auto_write_txt_to_docs/dual_output.py`
-- **기능**: 처리된 내용을 동시에 3가지 형태로 저장
-  - `output/raw/YYYY-MM-DD_raw.txt` — 중복 포함 원본
-  - `output/deduped/YYYY-MM-DD_deduped.txt` — 중복 제거본
-  - `output/html/YYYY-MM-DD_report.html` — 보기 좋은 HTML 리포트
-- **통계**: HTML 리포트에 원본 라인 수 / 중복 제거 후 / 제거된 중복 수 카드 표시
-- **활성화**: `config.json`에 `"dual_output_enabled": true` 추가
-
-### 3.2 유연 중복 판정 (Flexible Deduplication)
-
-- **파일**: `src/auto_write_txt_to_docs/flexible_dedup.py`
-- **기능**: 특정 필드를 중복 판정에서 제외
-- **설정 예시**:
-  ```json
-  {
-    "flexible_dedup": {
-      "enabled": true,
-      "ignore_fields": ["time"]
-    }
-  }
-  ```
-- **효과**: 시간만 다른 동일 내용을 중복으로 처리
-- **블록 모드 연동**: `StructuredBlockParser`와 함께 사용 시 더욱 강력
-
-### 3.3 SQLite 캐시 마이그레이션
-
-- **파일**: `src/auto_write_txt_to_docs/cache_database.py`
-- **기능**: JSON 파일 기반 캐시를 SQLite로 마이그레이션
-- **스키마**:
-  - `line_cache` — 해시, 미리보기, 첫/마지막 발견 시간, 발생 횟수
-  - `file_state` — 파일 경로, 바이트 오프셋, ctime/mtime
-  - `provenance` — 해시별 출처 파일 목록
-- **인덱스**: `hash`, `last_seen_at` 컬럼에 인덱스 생성
-- **마이그레이션**: `migrate_from_json(cache_json, stats_json)`으로 기존 데이터 이전
-- **효과**: 100,000줄 이상 대용량 캐시 안정적 처리
-
----
-
-## 전체 기능 요약 (Phase 1~3)
-
-| 기능 | Phase | 파일 | 설명 |
-|---|---|---|---|
-| 출처 추적 | 1 | `backend_processor.py` | 중복 라인의 발견 파일명 기록 |
-| 해시 기반 캐시 | 1 | `backend_processor.py` | 메모리 36% 절약 |
-| 중복 집계 API | 1 | `backend_processor.py` | TOP N 중복 라인 조회 |
-| StructuredBlockParser | 2 | `block_parser.py` | 블록 단위 파싱 |
-| 블록 중복 모드 | 2 | `backend_processor.py` | `content_parsing_mode: "block"` |
-| 배치 최적화 | 2 | `batch_optimizer.py` | 중복률 95% 이상 시 감시 간격 조절 |
-| 이중 출력 | 3 | `dual_output.py` | raw/deduped/HTML 동시 생성 |
-| 유연 중복 판정 | 3 | `flexible_dedup.py` | 필드 제외 중복 판정 |
-| SQLite 캐시 | 3 | `cache_database.py` | 대용량 데이터 안정적 처리 |
-
----
-
-## 테스트 결과
-
-| 테스트 모듈 | 테스트 수 | 결과 |
-|---|---|---|
-| `test_backend_processor.py` | 29개 | 전체 통과 |
-| `test_block_parser.py` | 7개 | 전체 통과 |
-| `test_batch_optimizer.py` | 5개 | 전체 통과 |
-| `test_dual_output.py` | 6개 | 전체 통과 |
-| `test_flexible_dedup.py` | 7개 | 전체 통과 |
-| `test_cache_database.py` | 7개 | 전체 통과 |
-| **합계** | **61개** | **전체 통과** |
-
-> 프로젝트 전체 119개 테스트 중 4개 실패는 기존 환경 의존성(customtkinter 미설치 3개) 및 버전 메타데이터 이슈(1개)로 본 릴리즈와 무관합니다.
-
----
-
-## 설치 및 업데이트
-
-### 소스 실행
-
-```powershell
-git clone https://github.com/122yjs/auto_write_txt_to_docs.git
-cd auto_write_txt_to_docs
-git checkout feat/deduplication-improvements
-pip install -r requirements.txt
-python main_gui.py
+```text
+%APPDATA%\MessengerDocsAutoWriter\output
 ```
 
-### 설정 예시 (이중 출력 + 유연 중복 + 블록 모드)
+파일은 아래처럼 나뉘어 저장됩니다.
 
-```json
-{
-  "content_parsing_mode": "block",
-  "block_separator": "-------------------------------------------------------------------------------",
-  "field_patterns": {
-    "sender": "^송신:(.+)",
-    "time": "^시간:(.+)",
-    "title": "^제목:(.+)",
-    "body": "^내용:(.+)"
-  },
-  "flexible_dedup": {
-    "enabled": true,
-    "ignore_fields": ["time"]
-  },
-  "dual_output_enabled": true,
-  "dual_output_dir": "C:/Users/사용자명/AppData/Roaming/MessengerDocsAutoWriter/output"
-}
+```text
+output\raw\YYYY-MM-DD_raw.txt
+output\deduped\YYYY-MM-DD_deduped.txt
+output\html\YYYY-MM-DD_report.html
 ```
 
-### SQLite 마이그레이션
+앱의 `고급 설정 > 로컬 산출물 저장`에서 저장 여부와 저장 위치를 바꿀 수 있고, `출력 폴더 열기`와 `오늘 HTML 리포트` 버튼으로 바로 확인할 수 있습니다.
 
-```python
-from src.auto_write_txt_to_docs.cache_database import CacheDatabase
+## 중복 판정과 파싱 설정
 
-db = CacheDatabase("cache.db")
-db.migrate_from_json("added_lines_cache.json", "duplicate_stats.json")
-print(f"마이그레이션 완료: {db.get_cache_size()}개 라인")
+- `중복 판정 제외 필드`에서 `time`처럼 비교에서 제외할 필드를 입력할 수 있습니다.
+- `콘텐츠 파싱 방식`은 기본 `line`이며, 필요한 경우 `block`으로 바꿀 수 있습니다.
+- 블록 모드에서는 구분자와 필드 패턴을 UI에서 입력할 수 있습니다.
+
+## 설치와 업데이트
+
+이번 버전부터 Windows 설치관리자 산출물을 추가합니다.
+
+```text
+MessengerDocsAutoWriterSetup-v1.2.0-alpha.exe
 ```
 
----
+설치관리자는 같은 AppId와 기본 설치 경로를 사용하므로 다음 버전 설치 시 기존 설치 위치에 덮어쓰는 방식으로 업데이트됩니다. 사용자 설정, 토큰, 캐시, 로컬 산출물은 계속 `%APPDATA%\MessengerDocsAutoWriter` 아래에 저장되어 앱을 업데이트해도 보존됩니다.
 
-## 알려진 이슈
+기존 산출물도 계속 제공합니다.
 
-1. **main_gui.py와의 통합 미완료**: 블록 모드, 이중 출력, 유연 중복 설정 UI는 아직 `main_gui.py`에 추가되지 않았습니다. 설정은 `config.json` 수동 편집 또는 코드 레벨에서만 가능합니다.
-2. **BatchDeduplicationOptimizer 미연동**: `run_monitoring()`에 optimizer가 정의되어 있으나, 메인 루프와의 완전한 통합은 이후 정식 릴리즈에서 진행됩니다.
-3. **SQLite 선택적 사용**: 현재는 `cache_database.py`가 독립 모듈로 제공됩니다. 기존 JSON 기반 캐시와의 완전한 교체는 다음 정식 버전에서 이루어집니다.
+- `MessengerDocsAutoWriter-win64-portable.zip`
+- `MessengerDocsAutoWriter-standalone.exe`
+- `MessengerDocsAutoWriterSetup-v1.2.0-alpha.exe`
 
----
+중복 설치를 줄이고 싶다면 설치관리자 버전을 권장합니다. portable zip은 여러 폴더에 풀 수 있으므로 사용자가 직접 이전 폴더를 정리해야 합니다.
 
-## 기여 및 피드백
+## 기존 사용자 참고
 
-- 버그 리포트: [GitHub Issues](https://github.com/122yjs/auto_write_txt_to_docs/issues)
-- 피드백 환영: 이중 출력 사용성, 유연 중복 필드 설정, SQLite 성능 등
+- 기존 `config.json`에 v1.2 설정이 없어도 앱이 자동으로 기본값을 채웁니다.
+- 로컬 산출물 저장이 기본 켜짐이므로, 처리 후 output 폴더에 raw/deduped/html 파일이 생깁니다.
+- Google 인증 정보와 사용자 데이터는 프로그램 설치 폴더가 아니라 사용자 설정 폴더에 남습니다.
 
----
+## 알려진 제한
 
-## 다음 단계 (Roadmap)
-
-- **v1.2.0-beta**: `main_gui.py`에 고급 설정 UI 추가 (블록 모드, 이중 출력, 유연 중복)
-- **v1.2.0**: `CacheDatabase`를 기본 캐시 저장소로 전환
-- **v2.0.0**: 플러그인 시스템, 크로스 플랫폼 지원
-
-> **릴리즈일**: 2026년 5월 1일
+- 자동 다운로드/자동 설치 업데이트는 아직 제공하지 않습니다. 앱은 최신 릴리즈 페이지로 안내합니다.
+- SQLite 캐시 모듈은 포함되어 있지만 기본 캐시 저장소 전환은 다음 단계에서 진행합니다.
+- 고급 블록 파싱은 입력 파일 형식에 맞는 필드 패턴 설정이 필요합니다.

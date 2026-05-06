@@ -8,7 +8,7 @@ on:
       tag:
         description: Release tag to build and upload
         required: true
-        default: v1.0.3
+        default: v1.2.0-alpha
 
 permissions:
   contents: write
@@ -63,7 +63,11 @@ jobs:
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Build Windows portable package
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows portable package and installer
         shell: pwsh
         run: .\scripts\build_release.ps1 -PythonExe python
 
@@ -74,4 +78,5 @@ jobs:
         run: |
           gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriter-win64-portable.zip --clobber
           gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriter-standalone.exe --clobber
+          gh release upload ${{ steps.vars.outputs.tag }} .\release\MessengerDocsAutoWriterSetup-v*.exe --clobber
           gh release upload ${{ steps.vars.outputs.tag }} .\src\auto_write_txt_to_docs\assets\developer_credentials.json.example --clobber

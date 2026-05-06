@@ -3,14 +3,22 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
+try:
+    from .path_utils import DUAL_OUTPUT_DIR_STR
+except ImportError:
+    DUAL_OUTPUT_DIR_STR = os.path.join(
+        os.path.expanduser("~"),
+        "AppData",
+        "Roaming",
+        "MessengerDocsAutoWriter",
+        "output",
+    )
+
 
 class DualOutputManager:
     def __init__(self, output_dir: Optional[str] = None):
         if output_dir is None:
-            base_dir = os.path.expanduser("~")
-            output_dir = os.path.join(base_dir, "AppData", "Roaming", "MessengerDocsAutoWriter", "output")
-            if not os.path.exists(os.path.dirname(output_dir)):
-                output_dir = os.path.join(base_dir, ".messenger_docs_output")
+            output_dir = DUAL_OUTPUT_DIR_STR
         self.output_dir = output_dir
         self.raw_dir = os.path.join(output_dir, "raw")
         self.deduped_dir = os.path.join(output_dir, "deduped")

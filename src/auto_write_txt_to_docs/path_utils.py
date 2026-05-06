@@ -79,6 +79,19 @@ def get_log_dir(app_name="MessengerDocsAutoWriter") -> Path:
     return log_dir
 
 
+def get_default_output_dir(app_name="MessengerDocsAutoWriter") -> Path:
+    """raw/deduped/html 로컬 산출물을 저장할 기본 폴더를 반환합니다."""
+    output_dir = get_user_config_dir(app_name) / "output"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logging.warning(f"출력 디렉토리 생성 실패 ({output_dir}): {e}. 기본 경로 사용.")
+        fallback_dir = get_project_root() / "output"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir
+    return output_dir
+
+
 # --- 기존 코드 끝 ---
 
 
@@ -133,6 +146,7 @@ CACHE_FILE = get_safe_cache_path("added_lines_cache.json", use_user_dir=True)  #
 DUPLICATE_STATS_FILE = get_safe_cache_path("duplicate_stats.json", use_user_dir=True)  # 중복 통계 파일
 PROCESSED_STATE_FILE = get_safe_cache_path("processed_state.json", use_user_dir=True)  # 처리 상태 파일
 LOG_DIR = get_log_dir()  # 로그는 사용자 설정 디렉토리 아래 logs 폴더 사용
+DUAL_OUTPUT_DIR = get_default_output_dir()  # raw/deduped/html 산출물 기본 폴더
 
 # 레거시 경로 (이전 버전 호환용)
 LEGACY_CONFIG_FILE = PROJECT_ROOT / "config.json"
@@ -145,6 +159,7 @@ CACHE_FILE_STR = str(CACHE_FILE)
 DUPLICATE_STATS_FILE_STR = str(DUPLICATE_STATS_FILE)
 PROCESSED_STATE_FILE_STR = str(PROCESSED_STATE_FILE)
 LOG_DIR_STR = str(LOG_DIR)
+DUAL_OUTPUT_DIR_STR = str(DUAL_OUTPUT_DIR)
 LEGACY_CONFIG_FILE_STR = str(LEGACY_CONFIG_FILE)
 LEGACY_CACHE_FILE_STR = str(LEGACY_CACHE_FILE)
 

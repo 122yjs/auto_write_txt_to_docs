@@ -112,6 +112,18 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
     )
     unsaved_changes_badge.pack(side="right")
 
+    version_badge = ctk.CTkLabel(
+        badge_group,
+        textvariable=state_vars["app_version_var"],
+        font=_font(ctk, 11, "bold", family=font_family),
+        corner_radius=999,
+        fg_color=("#E8F0FE", "#1E3A5F"),
+        text_color=("#174EA6", "#CFE3FF"),
+        padx=12,
+        pady=6,
+    )
+    version_badge.pack(side="right", padx=(0, 8))
+
     state_pill = ctk.CTkFrame(badge_group, corner_radius=999, fg_color=("gray90", "gray20"))
     state_pill.pack(side="right", padx=(0, 8))
     ctk.CTkLabel(
@@ -215,6 +227,7 @@ def _build_status_panel(ctk, parent, state_vars, callbacks, font_family):
         "docs_info_var": docs_info_var,
         "docs_info_label": docs_info_label,
         "unsaved_changes_badge": unsaved_changes_badge,
+        "version_badge": version_badge,
     }
 
 
@@ -329,6 +342,18 @@ def _build_basic_settings_rows(ctk, parent, state_vars, callbacks, font_family):
         select_doc_button,
         "현재 계정에서 접근 가능한 Google Docs 목록을 불러와 작업 문서를 선택합니다.",
     )
+    open_docs_button = ctk.CTkButton(
+        docs_action_row,
+        text="Docs 웹에서 열기",
+        width=120,
+        height=34,
+        corner_radius=12,
+        command=callbacks["open_docs_in_browser"],
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color="#4285F4",
+        hover_color="#3367D6",
+    )
+    open_docs_button.pack(side="left", padx=(8, 0))
 
     docs_input_row = ctk.CTkFrame(parent, fg_color="transparent")
     docs_input_row.pack(fill="x", padx=14, pady=(4, 6))
@@ -387,6 +412,7 @@ def _build_basic_settings_rows(ctk, parent, state_vars, callbacks, font_family):
         "create_doc_button": create_doc_button,
         "manual_doc_input_button": manual_doc_input_button,
         "select_doc_button": select_doc_button,
+        "open_docs_button": open_docs_button,
         "docs_target_status_label": docs_target_status_label,
         "docs_lock_button": docs_lock_button,
     }
@@ -520,6 +546,195 @@ def _build_advanced_settings_rows(ctk, parent, state_vars, callbacks, font_famil
         text_color=("gray45", "gray72"),
     ).pack(side="left", padx=(8, 12))
 
+    output_title_row = ctk.CTkFrame(parent, fg_color="transparent")
+    output_title_row.pack(fill="x", pady=(12, 4))
+    ctk.CTkLabel(
+        output_title_row,
+        text="로컬 산출물 저장",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    dual_output_switch = ctk.CTkSwitch(
+        output_title_row,
+        text="raw / deduped / HTML 리포트 저장",
+        variable=state_vars["dual_output_enabled"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    dual_output_switch.pack(side="left", padx=4)
+
+    output_dir_row = ctk.CTkFrame(parent, fg_color="transparent")
+    output_dir_row.pack(fill="x", pady=4)
+    ctk.CTkLabel(
+        output_dir_row,
+        text="저장 위치",
+        width=110,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    ).pack(side="left", padx=(0, 8))
+    dual_output_dir_entry = ctk.CTkEntry(
+        output_dir_row,
+        textvariable=state_vars["dual_output_dir"],
+        height=32,
+        font=_font(ctk, 12, family=font_family),
+    )
+    dual_output_dir_entry.pack(side="left", fill="x", expand=True, padx=4)
+    output_folder_browse_button = ctk.CTkButton(
+        output_dir_row,
+        text="폴더 선택",
+        width=84,
+        height=32,
+        corner_radius=10,
+        command=callbacks["browse_output_folder"],
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    output_folder_browse_button.pack(side="left", padx=(8, 0))
+    output_folder_button = ctk.CTkButton(
+        output_dir_row,
+        text="출력 폴더 열기",
+        width=112,
+        height=32,
+        corner_radius=10,
+        command=callbacks["open_output_folder"],
+        font=_font(ctk, 12, "bold", family=font_family),
+    )
+    output_folder_button.pack(side="left", padx=(8, 0))
+    html_report_button = ctk.CTkButton(
+        output_dir_row,
+        text="오늘 HTML 리포트",
+        width=118,
+        height=32,
+        corner_radius=10,
+        command=callbacks["open_today_html_report"],
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color=("gray85", "gray28"),
+        hover_color=("gray78", "gray34"),
+        text_color=("gray20", "gray92"),
+    )
+    html_report_button.pack(side="left", padx=(8, 0))
+
+    dedup_row = ctk.CTkFrame(parent, fg_color="transparent")
+    dedup_row.pack(fill="x", pady=(12, 4))
+    dedup_label = ctk.CTkLabel(
+        dedup_row,
+        text="중복 비교에서 뺄 항목",
+        width=140,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    )
+    dedup_label.pack(side="left", padx=(0, 8))
+    _attach_tooltip(
+        dedup_label,
+        "시간처럼 매번 달라지는 항목을 빼고 비교합니다. 예를 들어 시간만 다르고 내용은 같으면 중복으로 볼 수 있습니다.",
+        wraplength=360,
+    )
+    flexible_dedup_switch = ctk.CTkSwitch(
+        dedup_row,
+        text="이 항목 빼고 비교",
+        variable=state_vars["flexible_dedup_enabled"],
+        onvalue=True,
+        offvalue=False,
+        font=_font(ctk, 12, family=font_family),
+    )
+    flexible_dedup_switch.pack(side="left", padx=4)
+    _attach_tooltip(
+        flexible_dedup_switch,
+        "켜면 오른쪽에 적은 항목은 중복 여부를 비교할 때 무시합니다. 비워두면 전체 내용을 그대로 비교합니다.",
+        wraplength=360,
+    )
+    flexible_dedup_entry = ctk.CTkEntry(
+        dedup_row,
+        textvariable=state_vars["flexible_dedup_ignore_fields"],
+        width=220,
+        height=32,
+        font=_font(ctk, 12, family=font_family),
+        placeholder_text="예: time, timestamp",
+    )
+    flexible_dedup_entry.pack(side="left", padx=(8, 0))
+    _attach_tooltip(
+        flexible_dedup_entry,
+        "비교에서 빼고 싶은 항목 이름을 쉼표로 구분해 적습니다. 예: time, timestamp",
+        wraplength=360,
+    )
+
+    parsing_row = ctk.CTkFrame(parent, fg_color="transparent")
+    parsing_row.pack(fill="x", pady=4)
+    parsing_label = ctk.CTkLabel(
+        parsing_row,
+        text="글을 나누는 기준",
+        width=140,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    )
+    parsing_label.pack(side="left", padx=(0, 8))
+    _attach_tooltip(
+        parsing_label,
+        "텍스트 파일을 한 줄씩 처리할지, 구분선 사이의 여러 줄을 하나의 글 묶음으로 처리할지 고릅니다.",
+        wraplength=360,
+    )
+    parsing_mode_menu = ctk.CTkOptionMenu(
+        parsing_row,
+        variable=state_vars["content_parsing_mode"],
+        values=["한 줄씩 읽기", "묶음으로 읽기"],
+        width=130,
+        height=32,
+        font=_font(ctk, 12, family=font_family),
+    )
+    parsing_mode_menu.pack(side="left", padx=4)
+    _attach_tooltip(
+        parsing_mode_menu,
+        "'한 줄씩 읽기'는 줄마다 새 내용으로 봅니다. '묶음으로 읽기'는 구분선으로 나뉜 여러 줄을 한 번에 처리합니다.",
+        wraplength=360,
+    )
+    block_separator_entry = ctk.CTkEntry(
+        parsing_row,
+        textvariable=state_vars["block_separator"],
+        width=220,
+        height=32,
+        font=_font(ctk, 12, family=font_family),
+        placeholder_text="묶음을 나누는 선, 예: -----",
+    )
+    block_separator_entry.pack(side="left", padx=(8, 0))
+    _attach_tooltip(
+        block_separator_entry,
+        "'묶음으로 읽기'를 사용할 때 글 묶음을 나누는 구분선을 적습니다. 기본값은 긴 ----- 선입니다.",
+        wraplength=360,
+    )
+
+    field_patterns_row = ctk.CTkFrame(parent, fg_color="transparent")
+    field_patterns_row.pack(fill="x", pady=(0, 8))
+    field_patterns_label = ctk.CTkLabel(
+        field_patterns_row,
+        text="내용 이름 찾는 규칙",
+        width=140,
+        anchor="w",
+        font=_font(ctk, 13, "bold", family=font_family),
+    )
+    field_patterns_label.pack(side="left", padx=(0, 8))
+    _attach_tooltip(
+        field_patterns_label,
+        "묶음 안에서 '보낸 사람', '시간' 같은 값을 찾아 이름을 붙이는 규칙입니다. 특별히 나눠 비교할 때만 사용합니다.",
+        wraplength=360,
+    )
+    field_patterns_entry = ctk.CTkEntry(
+        field_patterns_row,
+        textvariable=state_vars["field_patterns_text"],
+        height=32,
+        font=_font(ctk, 12, family=font_family),
+        placeholder_text="예: sender=^송신:(.+), time=^시간:(.+)",
+    )
+    field_patterns_entry.pack(side="left", fill="x", expand=True, padx=4)
+    _attach_tooltip(
+        field_patterns_entry,
+        "고급 사용자용입니다. 이름=찾는규칙 형태로 적고 쉼표로 구분합니다. 예: sender=^송신:(.+), time=^시간:(.+)",
+        wraplength=360,
+    )
+
     notification_row = ctk.CTkFrame(parent, fg_color="transparent")
     notification_row.pack(fill="x", pady=4)
     ctk.CTkLabel(
@@ -561,6 +776,16 @@ def _build_advanced_settings_rows(ctk, parent, state_vars, callbacks, font_famil
     return {
         "max_cache_size_entry": max_cache_size_entry,
         "cache_folder_button": cache_folder_button,
+        "dual_output_switch": dual_output_switch,
+        "dual_output_dir_entry": dual_output_dir_entry,
+        "output_folder_browse_button": output_folder_browse_button,
+        "output_folder_button": output_folder_button,
+        "html_report_button": html_report_button,
+        "flexible_dedup_switch": flexible_dedup_switch,
+        "flexible_dedup_entry": flexible_dedup_entry,
+        "parsing_mode_menu": parsing_mode_menu,
+        "block_separator_entry": block_separator_entry,
+        "field_patterns_entry": field_patterns_entry,
         "notification_checkbox": notification_checkbox,
         "advanced_filter_button": advanced_filter_button,
     }
@@ -610,7 +835,7 @@ def _build_settings_panel(ctk, parent, state_vars, callbacks, font_family):
     ).pack(side="left", padx=(0, 8))
     ctk.CTkLabel(
         advanced_toggle_row,
-        text="필터, 캐시, 알림",
+        text="필터, 캐시, 출력, 중복",
         font=_font(ctk, 12, family=font_family),
         text_color=("gray45", "gray70"),
     ).pack(side="left")
@@ -643,21 +868,14 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     control_card = ctk.CTkFrame(parent, corner_radius=16)
     control_card.pack(fill="x", pady=(0, 10))
 
-    row = ctk.CTkFrame(control_card, fg_color="transparent")
-    row.pack(fill="x", padx=14, pady=(10, 6))
+    ctk.CTkLabel(
+        control_card,
+        text="앱 설정 관리",
+        font=_font(ctk, 15, "bold", family=font_family),
+    ).pack(anchor="w", padx=14, pady=(14, 2))
 
-    open_docs_button = ctk.CTkButton(
-        row,
-        text="Docs 웹에서 열기",
-        command=callbacks["open_docs_in_browser"],
-        width=128,
-        height=34,
-        corner_radius=12,
-        font=_font(ctk, 13, "bold", family=font_family),
-        fg_color="#4285F4",
-        hover_color="#3367D6",
-    )
-    open_docs_button.pack(side="left")
+    row = ctk.CTkFrame(control_card, fg_color="transparent")
+    row.pack(fill="x", padx=14, pady=(6, 10))
 
     save_button = ctk.CTkButton(
         row,
@@ -702,8 +920,35 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     )
     theme_button.pack(side="right", padx=(0, 10))
 
+    auth_title_row = ctk.CTkFrame(control_card, fg_color="transparent")
+    auth_title_row.pack(fill="x", padx=14, pady=(4, 4))
+    ctk.CTkLabel(
+        auth_title_row,
+        text="Google 계정 및 인증",
+        font=_font(ctk, 15, "bold", family=font_family),
+    ).pack(anchor="w")
+    ctk.CTkLabel(
+        auth_title_row,
+        text="Docs 문서 생성, 목록 조회, 기록 저장에 사용하는 Google 연결을 관리합니다.",
+        font=_font(ctk, 12, family=font_family),
+        text_color=("gray45", "gray70"),
+    ).pack(anchor="w", pady=(2, 0))
+
     auth_row = ctk.CTkFrame(control_card, fg_color="transparent")
     auth_row.pack(fill="x", padx=14, pady=(0, 10))
+
+    credentials_wizard_button = ctk.CTkButton(
+        auth_row,
+        text="인증 설정 마법사",
+        command=callbacks["show_credentials_wizard"],
+        width=138,
+        height=34,
+        corner_radius=12,
+        font=_font(ctk, 12, "bold", family=font_family),
+        fg_color="#0F9D58",
+        hover_color="#0B8043",
+    )
+    credentials_wizard_button.pack(side="left")
 
     reauth_button = ctk.CTkButton(
         auth_row,
@@ -717,7 +962,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
         hover_color=("gray78", "gray34"),
         text_color=("gray20", "gray92"),
     )
-    reauth_button.pack(side="left")
+    reauth_button.pack(side="left", padx=(10, 0))
     _attach_tooltip(
         reauth_button,
         "브라우저 인증을 다시 진행해 현재 앱과 Google 계정 연결을 복구합니다.",
@@ -760,7 +1005,7 @@ def _build_control_panel(ctk, parent, callbacks, font_family):
     )
 
     return {
-        "open_docs_button": open_docs_button,
+        "credentials_wizard_button": credentials_wizard_button,
         "backup_restore_button": backup_restore_button,
         "theme_button": theme_button,
         "save_button": save_button,

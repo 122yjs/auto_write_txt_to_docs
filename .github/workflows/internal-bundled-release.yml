@@ -53,7 +53,11 @@ jobs:
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Build Windows portable package
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows portable package and installer
         shell: pwsh
         run: .\scripts\build_release.ps1 -PythonExe python
 
@@ -76,3 +80,5 @@ jobs:
         shell: pwsh
         run: |
           gh release upload ${{ inputs.release_tag }} .\release\MessengerDocsAutoWriter-win64-portable.zip --clobber
+          gh release upload ${{ inputs.release_tag }} .\release\MessengerDocsAutoWriter-standalone.exe --clobber
+          gh release upload ${{ inputs.release_tag }} .\release\MessengerDocsAutoWriterSetup-v*.exe --clobber

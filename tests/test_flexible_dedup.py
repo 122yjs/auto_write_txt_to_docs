@@ -30,6 +30,16 @@ class FlexibleDeduplicationTests(unittest.TestCase):
         fp2 = strategy.compute_fingerprint(block2)
         self.assertNotEqual(fp1, fp2)
 
+    def test_fingerprint_uses_raw_text_when_fields_are_empty(self):
+        strategy = FlexibleDeduplicationStrategy()
+        block1 = StructuredBlock(raw_text="송신:이슬아\n내용:감사합니다")
+        block2 = StructuredBlock(raw_text="송신:김민정\n내용:확인했습니다")
+
+        fp1 = strategy.compute_fingerprint(block1)
+        fp2 = strategy.compute_fingerprint(block2)
+
+        self.assertNotEqual(fp1, fp2)
+
     def test_get_new_blocks_filters_duplicates(self):
         strategy = FlexibleDeduplicationStrategy()
         cache = OrderedDict()

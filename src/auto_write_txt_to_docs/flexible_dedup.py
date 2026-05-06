@@ -11,8 +11,11 @@ class FlexibleDeduplicationStrategy:
         fields = dict(block.fields)
         for field in self.ignore_fields:
             fields.pop(field, None)
-        
-        values = [context] + [f"{k}={v}" for k, v in sorted(fields.items())]
+
+        if block.fields:
+            values = [context] + [f"{k}={v}" for k, v in sorted(fields.items())]
+        else:
+            values = [context, block.raw_text]
         payload = "\n".join(values)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

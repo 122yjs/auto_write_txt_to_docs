@@ -32,7 +32,19 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         self.assertIn("developer_credentials.json.example", self.script_source)
         self.assertIn("Compress-Archive", self.script_source)
         self.assertIn("portable.zip", self.script_source)
+        self.assertIn("MessengerDocsAutoWriterSetup", self.script_source)
+        self.assertIn("iscc", self.script_source)
         self.assertIn("Remove-Item $BuildRoot -Recurse -Force", self.script_source)
+        self.assertIn("Write-Warning", self.script_source)
+        self.assertIn("temporary build cleanup failed", self.script_source)
+
+    def test_release_workflows_upload_installer_asset(self):
+        public_workflow = Path(".github/workflows/release-windows.yml").read_text(encoding="utf-8")
+        internal_workflow = Path(".github/workflows/internal-bundled-release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("Inno Setup", public_workflow)
+        self.assertIn("MessengerDocsAutoWriterSetup-v", public_workflow)
+        self.assertIn("MessengerDocsAutoWriterSetup-v", internal_workflow)
 
 
 if __name__ == "__main__":
