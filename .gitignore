@@ -9,6 +9,7 @@ venv/
 ENV/
 .rovodev/
 .agent.md
+.worktrees/
 
 # Distribution / packaging
 .Python
