@@ -114,12 +114,16 @@ except ImportError:
 try:
     from src.auto_write_txt_to_docs.autostart_utils import (
         is_windows_startup_enabled,
+        is_windows_startup_stale,
+        startup_launcher_matches_current,
         set_windows_startup_enabled,
         supports_windows_startup,
     )
 except ImportError:
     logging.error("자동 실행 유틸리티 모듈(autostart_utils.py)을 찾을 수 없습니다.")
     is_windows_startup_enabled = None
+    is_windows_startup_stale = None
+    startup_launcher_matches_current = None
     set_windows_startup_enabled = None
     supports_windows_startup = None
 
@@ -1297,6 +1301,8 @@ class MessengerDocsApp:
             supports_windows_startup
             and supports_windows_startup()
             and is_windows_startup_enabled
+            and is_windows_startup_stale
+            and startup_launcher_matches_current
             and set_windows_startup_enabled
         )
 
@@ -1325,9 +1331,9 @@ class MessengerDocsApp:
         if not self.can_manage_windows_startup():
             return
 
-        previous_state = is_windows_startup_enabled()
+        previous_state = startup_launcher_matches_current()
         desired_state = self.launch_on_windows_startup.get()
-        if desired_state == previous_state:
+        if desired_state == previous_state and not is_windows_startup_stale():
             return
 
         try:
@@ -2509,7 +2515,10 @@ class MessengerDocsApp:
         autostart_supported = self.can_manage_windows_startup()
 
         if autostart_supported:
-            self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
+            if is_windows_startup_stale():
+                self.autostart_hint.set("이전 버전의 자동 실행 항목이 남아 있습니다. 스위치를 켜면 현재 버전 경로로 갱신됩니다.")
+            else:
+                self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
             if hasattr(self, "autostart_switch"):
                 self.autostart_switch.configure(state="normal")
             return
@@ -2528,7 +2537,7 @@ class MessengerDocsApp:
             return
 
         try:
-            self.set_launch_on_windows_startup_value(is_windows_startup_enabled(), suppress_sync=True)
+            self.set_launch_on_windows_startup_value(startup_launcher_matches_current(), suppress_sync=True)
         except Exception as error:
             self.log(f"경고: Windows 자동 실행 상태 확인 실패 - {error}")
 
@@ -2538,8 +2547,8 @@ class MessengerDocsApp:
             return
 
         desired_state = self.launch_on_windows_startup.get()
-        current_state = is_windows_startup_enabled()
-        if desired_state == current_state:
+        current_state = startup_launcher_matches_current()
+        if desired_state == current_state and not is_windows_startup_stale():
             return
 
         if desired_state:
