@@ -797,6 +797,7 @@ class TestBlockLevelDeduplication(unittest.TestCase):
             f.write(content)
 
         fake_docs = FakeDocsService()
+        extracted_results = []
         backend_processor.process_file(
             filepath,
             {
@@ -812,8 +813,12 @@ class TestBlockLevelDeduplication(unittest.TestCase):
             },
             {"docs": fake_docs},
             lambda _message: None,
+            extracted_result_callback=extracted_results.append,
         )
         self.assertEqual(len(fake_docs.calls), 1)
+        self.assertEqual(len(extracted_results), 1)
+        self.assertEqual(extracted_results[0]["file_title"], "block_test.txt")
+        self.assertIn("내용:감사합니다", extracted_results[0]["full_text"])
         inserted_text = fake_docs.calls[0][1]["requests"][0]["insertText"]["text"]
         self.assertNotIn("제목:감사합니다", inserted_text)
         self.assertIn("내용:감사합니다", inserted_text)

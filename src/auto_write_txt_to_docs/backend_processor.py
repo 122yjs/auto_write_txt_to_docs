@@ -968,6 +968,11 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                     )
                 except Exception as e:
                     backend_logger.warning(f"이중 출력 저장 실패: {e}")
+            if extracted_result_callback:
+                try:
+                    extracted_result_callback(extraction_record)
+                except Exception as callback_error:
+                    backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
             log_func(f"처리 완료: {os.path.basename(filepath)}")
