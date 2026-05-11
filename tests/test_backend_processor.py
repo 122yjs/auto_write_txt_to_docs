@@ -113,6 +113,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.processed_file_states.clear()
         backend_processor.file_encodings.clear()
         backend_processor.added_lines_cache.clear()
+        backend_processor.block_dedupe_cache.clear()
         backend_processor.file_queue = queue.Queue()
         backend_processor.processed_state_dirty = False
         backend_processor.processed_state_save_timer = None
@@ -121,9 +122,11 @@ class BackendProcessorTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         self.original_processed_state_file = backend_processor.PROCESSED_STATE_FILE
         self.original_line_cache_file = backend_processor.LINE_CACHE_FILE
+        self.original_block_cache_file = backend_processor.BLOCK_CACHE_FILE
         self.original_max_global_cache_size = backend_processor.MAX_GLOBAL_CACHE_SIZE
         backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
         backend_processor.LINE_CACHE_FILE = os.path.join(self.temp_dir.name, "added_lines_cache.json")
+        backend_processor.BLOCK_CACHE_FILE = os.path.join(self.temp_dir.name, "block_dedupe_cache.json")
         self.timer_patcher = patch.object(backend_processor.threading, "Timer", FakeTimer)
         self.timer_patcher.start()
 
@@ -131,6 +134,7 @@ class BackendProcessorTests(unittest.TestCase):
         self.timer_patcher.stop()
         backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
         backend_processor.LINE_CACHE_FILE = self.original_line_cache_file
+        backend_processor.BLOCK_CACHE_FILE = self.original_block_cache_file
         backend_processor.MAX_GLOBAL_CACHE_SIZE = self.original_max_global_cache_size
         backend_processor.processed_state_dirty = False
         backend_processor.processed_state_save_timer = None
@@ -234,6 +238,57 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(configured_size, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
         self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
         self.assertTrue(any("기본값" in message for message in logs))
+
+    def test_save_and_load_block_cache_persists_fingerprints(self):
+        from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+        parser = StructuredBlockParser(block_separator="-" * 15)
+        blocks = parser.parse("송신:홍길동\n내용:같은 내용\n", source_file="old.txt")
+        expected_fingerprint = blocks[0].get_fingerprint()
+
+        backend_processor.remember_global_blocks(blocks)
+        backend_processor.save_block_cache(lambda _message: None)
+        backend_processor.block_dedupe_cache.clear()
+        backend_processor.load_block_cache(lambda _message: None)
+
+        self.assertIn(expected_fingerprint, backend_processor.block_dedupe_cache)
+
+    def test_warm_block_cache_from_processed_files_prevents_readding_existing_block_content(self):
+        old_filepath = self.create_named_file(
+            "old_block.txt",
+            "송신:홍길동\n시간:2026-05-08 10:00:00:000\n내용:이미 기록된 내용\n",
+        )
+        duplicate_filepath = self.create_named_file(
+            "new_duplicate_block.txt",
+            "송신:홍길동\n시간:2026-05-08 10:00:00:000\n내용:이미 기록된 내용\n",
+        )
+        backend_processor.mark_file_processed(
+            old_filepath,
+            os.path.getsize(old_filepath),
+            1.0,
+            file_identity=backend_processor.build_file_identity_from_stat(os.stat(old_filepath)),
+        )
+        backend_processor.block_dedupe_cache.clear()
+
+        logs = []
+        config = {
+            "docs_id": "doc-block",
+            "content_parsing_mode": "block",
+            "block_separator": "-" * 15,
+            "field_patterns": {},
+        }
+        backend_processor.warm_block_cache_from_processed_files(config, logs.append)
+
+        fake_docs = FakeDocsService()
+        backend_processor.process_file(
+            duplicate_filepath,
+            config,
+            {"docs": fake_docs},
+            logs.append,
+        )
+
+        self.assertEqual(len(fake_docs.calls), 0)
+        self.assertTrue(any("중복 블록만 감지" in message for message in logs))
 
     def test_build_extraction_record_includes_file_title_and_extracted_time(self):
         filepath = os.path.join(self.temp_dir.name, "대화로그.txt")

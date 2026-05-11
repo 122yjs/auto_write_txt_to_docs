@@ -24,6 +24,7 @@ except ImportError:
 
 try:
     from .path_utils import (
+        BLOCK_CACHE_FILE_STR,
         CACHE_FILE_STR,
         DUPLICATE_STATS_FILE_STR,
         LEGACY_CACHE_FILE_STR,
@@ -32,6 +33,7 @@ try:
     )
 except ImportError:
     project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    BLOCK_CACHE_FILE_STR = os.path.join(project_root_fallback, "block_dedupe_cache.json")
     CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
     DUPLICATE_STATS_FILE_STR = os.path.join(project_root_fallback, "duplicate_stats.json")
     LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
@@ -95,6 +97,7 @@ added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방
 duplicate_stats = {}
 block_dedupe_cache = OrderedDict()
 LINE_CACHE_FILE = CACHE_FILE_STR
+BLOCK_CACHE_FILE = BLOCK_CACHE_FILE_STR
 DUPLICATE_STATS_FILE = DUPLICATE_STATS_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
@@ -316,6 +319,99 @@ def remember_global_blocks(blocks):
 
 def get_new_blocks(blocks):
     return [b for b in blocks if b.get_fingerprint() not in block_dedupe_cache]
+
+
+def load_block_cache(log_func):
+    """블록 단위 중복 캐시를 디스크에서 복원합니다."""
+    global block_dedupe_cache
+
+    if not os.path.exists(BLOCK_CACHE_FILE):
+        log_func(f"백엔드: 블록 중복 캐시 파일({BLOCK_CACHE_FILE}) 없음. 새로 시작합니다.")
+        block_dedupe_cache = OrderedDict()
+        return
+
+    try:
+        with open(BLOCK_CACHE_FILE, "r", encoding="utf-8") as f:
+            loaded_hashes = json.load(f)
+
+        restored_cache = OrderedDict()
+        if isinstance(loaded_hashes, list):
+            for item in loaded_hashes:
+                if item:
+                    restored_cache[str(item)] = None
+        elif isinstance(loaded_hashes, dict):
+            for item in loaded_hashes.keys():
+                if item:
+                    restored_cache[str(item)] = None
+        else:
+            raise ValueError("블록 중복 캐시 최상위 구조가 list/dict가 아닙니다.")
+
+        block_dedupe_cache = restored_cache
+        log_func(f"백엔드: 블록 중복 캐시({BLOCK_CACHE_FILE}) 로드됨 ({len(block_dedupe_cache)}개).")
+    except Exception as e:
+        block_dedupe_cache = OrderedDict()
+        log_func(f"경고: 블록 중복 캐시 로드 실패 - {e}")
+
+
+def save_block_cache(log_func):
+    """블록 단위 중복 캐시를 디스크에 저장합니다."""
+    try:
+        target_dir = os.path.dirname(BLOCK_CACHE_FILE)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        with open(BLOCK_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(block_dedupe_cache.keys()), f, ensure_ascii=False, indent=2)
+        log_func(f"백엔드: 블록 중복 캐시 저장 완료 ({BLOCK_CACHE_FILE}, {len(block_dedupe_cache)}개).")
+    except Exception as e:
+        log_func(f"경고: 블록 중복 캐시 저장 실패 - {e}")
+
+
+def warm_block_cache_from_processed_files(config, log_func):
+    """처리 완료 이력이 있는 기존 파일을 블록 캐시에 예열해 재시작 후 중복 추가를 막습니다."""
+    if not isinstance(config, dict) or config.get("content_parsing_mode") != "block":
+        return 0
+
+    try:
+        from .block_parser import StructuredBlockParser
+    except ImportError:
+        from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+    parser = StructuredBlockParser(
+        block_separator=config.get("block_separator", "-------------------------------------------------------------------------------"),
+        field_patterns=config.get("field_patterns", {}),
+    )
+    flexible_strategy = get_flexible_strategy(config)
+    warmed_count = 0
+
+    with processed_state_lock:
+        processed_paths = list(processed_file_states.keys())
+
+    for processed_path in processed_paths:
+        if not processed_path or not os.path.exists(processed_path):
+            continue
+        try:
+            content = read_file_with_multiple_encodings(processed_path, 0, log_func)
+            if not content or not content.strip():
+                continue
+            blocks = parser.parse(content, source_file=processed_path)
+            valid_blocks = [block for block in blocks if parser.validate_block(block)[0]]
+            if not valid_blocks:
+                continue
+            before_count = len(block_dedupe_cache)
+            if flexible_strategy:
+                flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                remember_global_blocks(valid_blocks)
+            warmed_count += len(block_dedupe_cache) - before_count
+        except Exception as e:
+            logging.getLogger("backend_processor").warning(
+                f"블록 중복 캐시 예열 실패: {processed_path} - {e}"
+            )
+
+    if warmed_count:
+        log_func(f"백엔드: 기존 처리 파일에서 블록 중복 캐시 예열 완료 ({warmed_count}개 추가).")
+        save_block_cache(log_func)
+    return warmed_count
 
 
 def get_last_attempt_time(filepath):
@@ -927,6 +1023,7 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                     flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
                 else:
                     remember_global_blocks(valid_blocks)
+                save_block_cache(log_func)
                 mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
                 schedule_processed_state_save(log_func)
                 return
@@ -957,6 +1054,7 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                 flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
             else:
                 remember_global_blocks(valid_blocks)
+            save_block_cache(log_func)
             if dual_output_manager:
                 try:
                     write_dual_output_files(
@@ -1154,6 +1252,9 @@ def run_monitoring(
     backend_logger.info(f"라인 캐시 로드 완료 - 캐시된 라인 수: {len(added_lines_cache)}")
     load_processed_state(log_func_threadsafe) # 처리 상태 로드
     backend_logger.info(f"처리 상태 로드 완료 - 추적 파일 수: {len(processed_file_states)}")
+    load_block_cache(log_func_threadsafe)
+    backend_logger.info(f"블록 중복 캐시 로드 완료 - 캐시된 블록 수: {len(block_dedupe_cache)}")
+    warm_block_cache_from_processed_files(config, log_func_threadsafe)
 
     google_services = preloaded_services
     if google_services and 'docs' in google_services:
@@ -1271,6 +1372,7 @@ def run_monitoring(
         log_func_threadsafe("백엔드: 감시자 종료 완료.")
         backend_logger.info("감시자 종료 완료")
         save_line_cache(log_func_threadsafe) # 최종 라인 캐시 저장
+        save_block_cache(log_func_threadsafe) # 최종 블록 중복 캐시 저장
         flush_processed_state_save(log_func_threadsafe) # 최종 처리 상태 저장
         log_func_threadsafe("백엔드: 모든 작업 완료.")
         backend_logger.info("모든 작업 완료")
