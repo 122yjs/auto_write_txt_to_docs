@@ -119,6 +119,32 @@ class StructuredBlockParserTests(unittest.TestCase):
             "송신:김민정\n시간:2026-03-18 13:10:00:000\n제목:답장드립니다\n내용:확인했습니다.",
         )
 
+    def test_parse_removes_ezq_reply_original_header(self):
+        parser = StructuredBlockParser()
+        content = (
+            "송신:임주성\n"
+            "시간:2026-05-14 14:13:47:000\n"
+            "제목:3만원이긴한데 ㅋㅋㅋ... 감사합니다.\n"
+            "내용:3만원이긴한데 ㅋㅋㅋ... 감사합니다.\n"
+            "\n"
+            "-----------------------------------------------------\n"
+            "발신자 : 이은숙[우성초등학교/교감]\n"
+            "날   짜 : 2026-05-13 14:18:10\n"
+            "\n"
+            "주성샘^^\n"
+            "축하드려요.\n"
+            "30만원~~^^\n"
+        )
+
+        blocks = parser.parse(content)
+
+        self.assertEqual(
+            blocks[0].raw_text,
+            "송신:임주성\n시간:2026-05-14 14:13:47:000\n"
+            "답장: 이은숙님의 2026-05-13 14:18 메시지에 대한 답장\n"
+            "내용:3만원이긴한데 ㅋㅋㅋ... 감사합니다.",
+        )
+
     def test_parse_multiple_blocks_with_separator(self):
         parser = StructuredBlockParser(
             block_separator="-" * 15,

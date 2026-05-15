@@ -71,6 +71,11 @@ class StructuredBlockParser:
         if marker_index is not None:
             return lines[:marker_index]
 
+        ezq_original = self._find_ezq_reply_original(lines)
+        if ezq_original is not None:
+            original_index, reply_context_line = ezq_original
+            return self._insert_reply_context_line(lines[:original_index], reply_context_line)
+
         embedded_index = self._find_embedded_message_header_index(lines)
         if embedded_index is not None:
             return lines[:embedded_index]
@@ -86,6 +91,80 @@ class StructuredBlockParser:
             if marker_pattern.search(line):
                 return index
         return None
+
+    def _find_ezq_reply_original(self, lines: List[str]) -> Optional[Tuple[int, str]]:
+        first_body_index = self._find_label_line_index(lines, "내용")
+        if first_body_index is None:
+            return None
+
+        for index in range(first_body_index + 1, len(lines)):
+            if self._is_dash_separator_line(lines[index]):
+                header_lines = lines[index + 1:index + 5]
+                if self._has_ezq_reply_header(header_lines):
+                    return index, self._build_reply_context_line(header_lines)
+                continue
+
+            header_lines = lines[index:index + 5]
+            if self._is_ezq_reply_sender_line(lines[index]) and self._has_ezq_reply_header(header_lines):
+                return index, self._build_reply_context_line(header_lines)
+
+        return None
+
+    def _insert_reply_context_line(self, current_lines: List[str], reply_context_line: str) -> List[str]:
+        if not reply_context_line:
+            return current_lines
+
+        insert_index = self._find_label_line_index(current_lines, "내용")
+        if insert_index is None:
+            return current_lines + [reply_context_line]
+
+        return current_lines[:insert_index] + [reply_context_line] + current_lines[insert_index:]
+
+    def _has_ezq_reply_header(self, candidate_lines: List[str]) -> bool:
+        normalized_labels = {
+            self._normalize_label_name(self._get_label_name(line))
+            for line in candidate_lines
+        }
+        return "발신자" in normalized_labels and "날짜" in normalized_labels
+
+    def _is_ezq_reply_sender_line(self, line: str) -> bool:
+        return self._normalize_label_name(self._get_label_name(line)) == "발신자"
+
+    def _is_dash_separator_line(self, line: str) -> bool:
+        return bool(re.fullmatch(r"\s*-{5,}\s*", line))
+
+    def _normalize_label_name(self, label: str) -> str:
+        return re.sub(r"\s+", "", label or "")
+
+    def _build_reply_context_line(self, header_lines: List[str]) -> str:
+        sender = self._clean_reply_sender(self._extract_normalized_label_value(header_lines, "발신자"))
+        date_text = self._format_reply_date(self._extract_normalized_label_value(header_lines, "날짜"))
+
+        if sender and date_text:
+            return f"답장: {sender}님의 {date_text} 메시지에 대한 답장"
+        if sender:
+            return f"답장: {sender}님의 메시지에 대한 답장"
+        if date_text:
+            return f"답장: {date_text} 메시지에 대한 답장"
+        return "답장: 이전 메시지에 대한 답장"
+
+    def _extract_normalized_label_value(self, lines: List[str], normalized_label: str) -> str:
+        for line in lines:
+            if self._normalize_label_name(self._get_label_name(line)) != normalized_label:
+                continue
+            match = re.match(r"^\s*[^:：]{1,20}\s*[:：]\s*(.*)$", line)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    def _clean_reply_sender(self, sender_text: str) -> str:
+        return re.sub(r"\[.*$", "", sender_text or "").strip()
+
+    def _format_reply_date(self, date_text: str) -> str:
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})", date_text or "")
+        if match:
+            return f"{match.group(1)} {match.group(2)}"
+        return (date_text or "").strip()
 
     def _find_embedded_message_header_index(self, lines: List[str]) -> Optional[int]:
         first_sender_index = self._find_label_line_index(lines, "송신")
