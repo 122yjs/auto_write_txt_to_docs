@@ -71,8 +71,9 @@ class FakeTimer:
 
 
 class FakeDocsService:
-    def __init__(self, should_fail=False):
+    def __init__(self, should_fail=False, exception_to_raise=None):
         self.should_fail = should_fail
+        self.exception_to_raise = exception_to_raise
         self.calls = []
 
     def documents(self):
@@ -83,6 +84,8 @@ class FakeDocsService:
         return self
 
     def execute(self):
+        if self.exception_to_raise:
+            raise self.exception_to_raise
         if self.should_fail:
             raise RuntimeError("테스트용 Docs 실패")
         return {}
@@ -365,6 +368,27 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(len(FakeTimer.instances), 2)
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("Docs 업데이트 중 예외 발생" in message for message in logs))
+
+    def test_docs_update_refresh_error_requires_reauth_without_retry(self):
+        filepath = self.create_temp_file("reauth required\n")
+        logs = []
+        refresh_error = backend_processor.RefreshError("invalid_grant: Token has been expired or revoked.")
+        fake_docs_service = FakeDocsService(exception_to_raise=refresh_error)
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-refresh"},
+            {"docs": fake_docs_service},
+            logs.append,
+        )
+
+        state = backend_processor.processed_file_states[filepath]
+        self.assertNotIn("size", state)
+        self.assertNotIn("last_byte_offset", state)
+        self.assertFalse(state.get("retry_scheduled"))
+        self.assertEqual(len(FakeTimer.instances), 1)
+        self.assertEqual(len(fake_docs_service.calls), 1)
+        self.assertTrue(any("Google reauthentication required" in message for message in logs))
 
     def test_successful_docs_update_marks_file_processed(self):
         filepath = self.create_temp_file("정상 처리 테스트\n")

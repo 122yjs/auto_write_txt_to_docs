@@ -7,6 +7,11 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import queue
 import threading
+try:
+    from google.auth.exceptions import RefreshError
+except ImportError:
+    class RefreshError(Exception):
+        pass
 from googleapiclient.errors import HttpError
 import traceback
 import logging
@@ -16,11 +21,12 @@ from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유
 
 # google_auth 모듈 임포트
 try:
-    from .google_auth import GoogleAuthActionRequired, get_google_services
+    from .google_auth import GoogleAuthActionRequired, get_google_services, quarantine_token_file
 except ImportError:
     logging.error("ERROR: google_auth.py module is missing. Google API authentication is disabled.")
     GoogleAuthActionRequired = Exception
     get_google_services = None
+    quarantine_token_file = None
 
 try:
     from .path_utils import (
@@ -524,6 +530,26 @@ def schedule_retry(filepath, log_func, reason, current_time=None):
     retry_timer = threading.Timer(RETRY_DELAY, requeue_file)
     retry_timer.daemon = True
     retry_timer.start()
+
+
+def handle_google_refresh_error(filepath, log_func, error, backend_logger):
+    """Stop retrying when Google's stored refresh token is expired or revoked."""
+    log_func(
+        "오류: Google reauthentication required - stored token expired or revoked. "
+        "Reconnect your Google account, then restart monitoring."
+    )
+    backend_logger.warning(
+        f"Google reauthentication required for {filepath}: {error}",
+        exc_info=True,
+    )
+    if quarantine_token_file:
+        quarantined_path = quarantine_token_file(log_func, reason_code="refresh_failed_during_docs_update")
+        if quarantined_path:
+            log_func(f"Google token quarantined: {quarantined_path}")
+    with processed_state_lock:
+        state = get_file_state(filepath)
+        state['retry_scheduled'] = False
+    schedule_processed_state_save(log_func)
 
 
 def remove_file_processing_state(filepath):
@@ -1038,6 +1064,9 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                 docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
                 log_func(f"  - Google Docs 업데이트 완료 (파일: {os.path.basename(filepath)}, {len(new_blocks)}개 블록 추가)")
                 backend_logger.info(f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(new_blocks)}개 블록 추가")
+            except RefreshError as error:
+                handle_google_refresh_error(filepath, log_func, error, backend_logger)
+                return
             except HttpError as error:
                 log_func(f"오류: Docs 업데이트 API 오류 - {error}")
                 backend_logger.error(f"Docs 업데이트 API 오류: {error}")
@@ -1124,6 +1153,9 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                             extracted_result_callback(duplicate_record)
                         except Exception as callback_error:
                             backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
+                except RefreshError as error:
+                    handle_google_refresh_error(filepath, log_func, error, backend_logger)
+                    return
                 except HttpError as error:
                     log_func(f"오류: Docs 업데이트 API 오류 - {error}")
                     backend_logger.error(f"Docs 업데이트 API 오류: {error}")
@@ -1183,6 +1215,9 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
             backend_logger.info(
                 f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(truly_new_lines)}줄 추가"
             )
+        except RefreshError as error:
+            handle_google_refresh_error(filepath, log_func, error, backend_logger)
+            return
         except HttpError as error:
             log_func(f"오류: Docs 업데이트 API 오류 - {error}")
             backend_logger.error(f"Docs 업데이트 API 오류: {error}")
