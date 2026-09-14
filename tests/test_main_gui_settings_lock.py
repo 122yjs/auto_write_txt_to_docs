@@ -157,7 +157,7 @@ class MainGuiTestBase(unittest.TestCase):
         app.content_parsing_mode = FakeVar("line")
         app.block_separator = FakeVar("---")
         app.field_patterns_text = FakeVar("")
-        app.app_version_var = FakeVar("v1.2.0-alpha")
+        app.app_version_var = FakeVar("v1.2.1-alpha")
         app.docs_target_status_var = FakeVar("")
         app.log = Mock()
         app.log_threadsafe = Mock()

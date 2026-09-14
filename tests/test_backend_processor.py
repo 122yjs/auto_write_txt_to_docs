@@ -293,6 +293,41 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(len(fake_docs.calls), 0)
         self.assertTrue(any("중복 블록만 감지" in message for message in logs))
 
+    def test_failed_block_update_is_not_warmed_and_is_sent_after_restart(self):
+        filepath = self.create_named_file(
+            "failed_block.txt",
+            "송신:홍길동\n시간:2026-09-14 12:39:47:000\n내용:연결 복구 후 전송할 내용\n",
+        )
+        config = {
+            "docs_id": "doc-block",
+            "content_parsing_mode": "block",
+            "block_separator": "-" * 15,
+            "field_patterns": {},
+        }
+        logs = []
+        failed_docs = FakeDocsService(should_fail=True)
+
+        backend_processor.process_file(filepath, config, {"docs": failed_docs}, logs.append)
+        backend_processor.save_processed_state(lambda _message: None)
+        backend_processor.processed_file_states.clear()
+        backend_processor.block_dedupe_cache.clear()
+        backend_processor.load_processed_state(lambda _message: None)
+
+        warmed_count = backend_processor.warm_block_cache_from_processed_files(config, logs.append)
+
+        self.assertEqual(warmed_count, 0)
+        self.assertEqual(len(backend_processor.block_dedupe_cache), 0)
+
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+        recovered_docs = FakeDocsService()
+        backend_processor.process_file(filepath, config, {"docs": recovered_docs}, logs.append)
+
+        self.assertEqual(len(recovered_docs.calls), 1)
+        self.assertEqual(
+            backend_processor.processed_file_states[filepath]["last_byte_offset"],
+            os.path.getsize(filepath),
+        )
+
     def test_build_extraction_record_includes_file_title_and_extracted_time(self):
         filepath = os.path.join(self.temp_dir.name, "대화로그.txt")
 

@@ -32,7 +32,7 @@ import pystray
 try:
     from src import __version__ as APP_VERSION
 except ImportError:
-    APP_VERSION = "1.2.0-alpha"
+    APP_VERSION = "1.2.1-alpha"
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD

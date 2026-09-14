@@ -390,7 +390,11 @@ def warm_block_cache_from_processed_files(config, log_func):
     warmed_count = 0
 
     with processed_state_lock:
-        processed_paths = list(processed_file_states.keys())
+        processed_paths = [
+            filepath
+            for filepath, state in processed_file_states.items()
+            if int(state.get('last_byte_offset', state.get('size', 0)) or 0) > 0
+        ]
 
     for processed_path in processed_paths:
         if not processed_path or not os.path.exists(processed_path):

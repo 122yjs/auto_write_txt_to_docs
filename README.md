@@ -346,7 +346,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -ExcludeBun
 - 실행 폴더: `dist\MessengerDocsAutoWriter\`
 - 배포 zip: `release\MessengerDocsAutoWriter-win64-portable.zip`
 - 단일 실행 파일: `release\MessengerDocsAutoWriter-standalone.exe`
-- 설치관리자: `release\MessengerDocsAutoWriterSetup-v1.2.0-alpha.exe`
+- 설치관리자: `release\MessengerDocsAutoWriterSetup-v1.2.1-alpha.exe`
 
 설치관리자 버전은 다음 업데이트 때 같은 앱 ID와 설치 경로를 사용합니다. 사용자 설정과 캐시는 `%APPDATA%\MessengerDocsAutoWriter`에 남기 때문에 앱을 다시 설치해도 보존됩니다.
 
