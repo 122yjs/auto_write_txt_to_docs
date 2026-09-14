@@ -34,7 +34,32 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertTrue(config_data["play_event_sounds"])
         self.assertEqual(config_data["file_extensions"], ".txt")
         self.assertEqual(config_data["max_cache_size"], 5000)
+        self.assertTrue(config_data["dual_output_enabled"])
+        self.assertIn("MessengerDocsAutoWriter", config_data["dual_output_dir"])
+        self.assertEqual(config_data["content_parsing_mode"], "line")
+        self.assertFalse(config_data["flexible_dedup"]["enabled"])
+        self.assertEqual(config_data["flexible_dedup"]["ignore_fields"], [])
         self.assertNotIn("unknown_key", config_data)
+
+    def test_normalize_config_data_preserves_v12_settings(self):
+        config_data = normalize_config_data({
+            "dual_output_enabled": False,
+            "dual_output_dir": "E:/exports",
+            "content_parsing_mode": "block",
+            "block_separator": "---",
+            "field_patterns": {"time": "^시간:(.+)"},
+            "flexible_dedup": {"enabled": True, "ignore_fields": ["time", "timestamp"]},
+        })
+
+        self.assertFalse(config_data["dual_output_enabled"])
+        self.assertEqual(config_data["dual_output_dir"], "E:/exports")
+        self.assertEqual(config_data["content_parsing_mode"], "block")
+        self.assertEqual(config_data["block_separator"], "---")
+        self.assertEqual(config_data["field_patterns"], {"time": "^시간:(.+)"})
+        self.assertEqual(
+            config_data["flexible_dedup"],
+            {"enabled": True, "ignore_fields": ["time", "timestamp"]},
+        )
 
     def test_normalize_config_data_falls_back_to_default_for_invalid_cache_size(self):
         config_data = normalize_config_data({
@@ -56,6 +81,12 @@ class ConfigManagerTests(unittest.TestCase):
                 "show_success_notifications": False,
                 "play_event_sounds": False,
                 "max_cache_size": "7500",
+                "dual_output_enabled": False,
+                "dual_output_dir": "E:/exports",
+                "content_parsing_mode": "block",
+                "block_separator": "---",
+                "field_patterns": {"sender": "^송신:(.+)"},
+                "flexible_dedup": {"enabled": True, "ignore_fields": ["time"]},
             }, config_path=str(config_path))
 
             loaded_config, used_path, loaded_from_legacy, config_found = load_app_config(
@@ -73,6 +104,11 @@ class ConfigManagerTests(unittest.TestCase):
         self.assertFalse(loaded_config["show_success_notifications"])
         self.assertFalse(loaded_config["play_event_sounds"])
         self.assertEqual(loaded_config["max_cache_size"], 7500)
+        self.assertFalse(loaded_config["dual_output_enabled"])
+        self.assertEqual(loaded_config["dual_output_dir"], "E:/exports")
+        self.assertEqual(loaded_config["content_parsing_mode"], "block")
+        self.assertEqual(loaded_config["field_patterns"], {"sender": "^송신:(.+)"})
+        self.assertEqual(loaded_config["flexible_dedup"]["ignore_fields"], ["time"])
 
     def test_load_app_config_falls_back_to_legacy_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

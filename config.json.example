@@ -3,5 +3,14 @@
     "docs_input": "https://docs.google.com/document/d/EXAMPLE_ID/edit",
     "show_success_notifications": true,
     "play_event_sounds": true,
-    "max_cache_size": 10000
+    "max_cache_size": 10000,
+    "dual_output_enabled": true,
+    "dual_output_dir": "C:/Users/ExampleUser/AppData/Roaming/MessengerDocsAutoWriter/output",
+    "content_parsing_mode": "line",
+    "block_separator": "-------------------------------------------------------------------------------",
+    "field_patterns": {},
+    "flexible_dedup": {
+        "enabled": false,
+        "ignore_fields": []
+    }
 }

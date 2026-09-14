@@ -42,6 +42,50 @@ def build_windows_startup_launcher_contents(script_path=None, executable_path=No
     return f"@echo off\n{command}\n"
 
 
+def _normalize_for_compare(path):
+    return str(Path(path).expanduser()).replace("/", "\\").rstrip("\\").casefold()
+
+
+def _expected_startup_paths(script_path=None, executable_path=None, frozen=None):
+    is_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    executable = Path(executable_path or sys.executable)
+    if is_frozen:
+        return [_normalize_for_compare(executable)]
+
+    main_script = Path(script_path) if script_path is not None else Path(__file__).resolve().parents[2] / "main_gui.py"
+    return [_normalize_for_compare(executable), _normalize_for_compare(main_script)]
+
+
+def startup_launcher_matches_current(launcher_path=None, script_path=None, executable_path=None, frozen=None):
+    """자동 실행 런처가 현재 실행 파일/스크립트를 가리키는지 확인한다."""
+    target_path = Path(launcher_path) if launcher_path is not None else get_startup_launcher_path()
+    if not target_path or not target_path.exists():
+        return False
+
+    try:
+        content = target_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    normalized_content = content.replace("/", "\\").casefold()
+    return all(expected in normalized_content for expected in _expected_startup_paths(script_path, executable_path, frozen))
+
+
+def is_windows_startup_stale(launcher_path=None, script_path=None, executable_path=None, frozen=None):
+    """자동 실행 런처가 존재하지만 현재 앱 경로를 가리키지 않는지 확인한다."""
+    target_path = Path(launcher_path) if launcher_path is not None else get_startup_launcher_path()
+    return bool(
+        target_path
+        and target_path.exists()
+        and not startup_launcher_matches_current(
+            launcher_path=target_path,
+            script_path=script_path,
+            executable_path=executable_path,
+            frozen=frozen,
+        )
+    )
+
+
 def is_windows_startup_enabled(launcher_path=None):
     """자동 실행 런처 파일이 존재하는지 확인한다."""
     target_path = Path(launcher_path) if launcher_path is not None else get_startup_launcher_path()

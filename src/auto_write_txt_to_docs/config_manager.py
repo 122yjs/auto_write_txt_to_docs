@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from src.auto_write_txt_to_docs.path_utils import CONFIG_FILE_STR, LEGACY_CONFIG_FILE_STR
+from src.auto_write_txt_to_docs.path_utils import CONFIG_FILE_STR, DUAL_OUTPUT_DIR_STR, LEGACY_CONFIG_FILE_STR
 
 
 CONFIG_DEFAULTS = {
@@ -19,6 +19,15 @@ CONFIG_DEFAULTS = {
     "regex_pattern": "",
     "appearance_mode": "System",
     "max_cache_size": 10000,
+    "dual_output_enabled": True,
+    "dual_output_dir": DUAL_OUTPUT_DIR_STR,
+    "content_parsing_mode": "line",
+    "block_separator": "-------------------------------------------------------------------------------",
+    "field_patterns": {},
+    "flexible_dedup": {
+        "enabled": False,
+        "ignore_fields": [],
+    },
 }
 
 BACKUP_VERSION = "1.0"
@@ -36,6 +45,31 @@ def normalize_config_data(config_data):
         for key in normalized_config:
             if key in config_data:
                 normalized_config[key] = config_data[key]
+
+    normalized_config["dual_output_enabled"] = bool(normalized_config.get("dual_output_enabled", True))
+    normalized_output_dir = str(normalized_config.get("dual_output_dir") or "").strip()
+    normalized_config["dual_output_dir"] = normalized_output_dir or DUAL_OUTPUT_DIR_STR
+
+    parsing_mode = str(normalized_config.get("content_parsing_mode") or "line").strip().lower()
+    normalized_config["content_parsing_mode"] = parsing_mode if parsing_mode in {"line", "block"} else "line"
+    normalized_config["block_separator"] = str(normalized_config.get("block_separator") or CONFIG_DEFAULTS["block_separator"])
+    if not isinstance(normalized_config.get("field_patterns"), dict):
+        normalized_config["field_patterns"] = {}
+
+    flexible_dedup = normalized_config.get("flexible_dedup")
+    if not isinstance(flexible_dedup, dict):
+        flexible_dedup = {}
+    ignore_fields = flexible_dedup.get("ignore_fields", [])
+    if isinstance(ignore_fields, str):
+        ignore_fields = [field.strip() for field in ignore_fields.split(",") if field.strip()]
+    elif isinstance(ignore_fields, (list, tuple, set)):
+        ignore_fields = [str(field).strip() for field in ignore_fields if str(field).strip()]
+    else:
+        ignore_fields = []
+    normalized_config["flexible_dedup"] = {
+        "enabled": bool(flexible_dedup.get("enabled", False)),
+        "ignore_fields": ignore_fields,
+    }
 
     try:
         max_cache_size = int(str(normalized_config["max_cache_size"]).strip())

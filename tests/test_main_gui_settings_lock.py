@@ -96,6 +96,21 @@ class ImmediateThread:
             self.target(*self.args, **self.kwargs)
 
 
+class CapturingThread:
+    latest = None
+
+    def __init__(self, target=None, args=None, kwargs=None, daemon=None):
+        self.target = target
+        self.args = args or ()
+        self.kwargs = kwargs or {}
+        self.daemon = daemon
+        self.started = False
+        CapturingThread.latest = self
+
+    def start(self):
+        self.started = True
+
+
 class MainGuiTestBase(unittest.TestCase):
     def setUp(self):
         self.fake_ctk = types.SimpleNamespace(
@@ -135,6 +150,14 @@ class MainGuiTestBase(unittest.TestCase):
         app.regex_pattern = FakeVar("")
         app.appearance_mode = FakeVar("System")
         app.max_cache_size = FakeVar("10000")
+        app.dual_output_enabled = FakeVar(True)
+        app.dual_output_dir = FakeVar("E:/exports")
+        app.flexible_dedup_enabled = FakeVar(False)
+        app.flexible_dedup_ignore_fields = FakeVar("")
+        app.content_parsing_mode = FakeVar("line")
+        app.block_separator = FakeVar("---")
+        app.field_patterns_text = FakeVar("")
+        app.app_version_var = FakeVar("v1.2.0-alpha")
         app.docs_target_status_var = FakeVar("")
         app.log = Mock()
         app.log_threadsafe = Mock()
@@ -158,13 +181,19 @@ class MainGuiTestBase(unittest.TestCase):
         app.watch_folder_browse_button = FakeButton("폴더 선택")
         app.watch_folder_open_button = FakeButton("열기")
         app.cache_folder_button = FakeButton("캐시 폴더 열기")
+        app.output_folder_button = FakeButton("출력 폴더 열기")
+        app.output_folder_browse_button = FakeButton("출력 폴더 선택")
+        app.html_report_button = FakeButton("오늘 HTML 리포트")
         app.autostart_switch = FakeButton("Windows 자동 실행")
 
         app.create_doc_button = FakeButton("새 문서 만들기")
         app.manual_doc_input_button = FakeButton("기존 문서 주소 입력")
         app.select_doc_button = FakeButton("문서 목록")
+        app.open_docs_button = FakeButton("Docs 웹에서 열기")
+        app.credentials_wizard_button = FakeButton("인증 설정 마법사")
         app.reauth_button = FakeButton("Google 계정 다시 연결")
         app.reset_auth_button = FakeButton("인증 초기화")
+        app.test_connection_button = FakeButton("연결 테스트")
         app.docs_input_entry = FakeEntry()
         app.docs_lock_button = FakeButton("문서 경로 확정")
         app.docs_target_status_label = FakeLabel()
@@ -179,14 +208,22 @@ class MainGuiTestBase(unittest.TestCase):
             app.watch_folder_open_button,
         ]
         cache_row = FakeFrame()
-        cache_row.children = [app.cache_folder_button]
+        cache_row.children = [
+            app.cache_folder_button,
+            app.output_folder_button,
+            app.output_folder_browse_button,
+            app.html_report_button,
+        ]
         docs_action_row = FakeFrame()
         docs_action_row.children = [
             app.create_doc_button,
             app.manual_doc_input_button,
             app.select_doc_button,
+            app.open_docs_button,
+            app.credentials_wizard_button,
             app.reauth_button,
             app.reset_auth_button,
+            app.test_connection_button,
         ]
         docs_input_row = FakeFrame()
         docs_input_row.children = [app.docs_input_entry]
@@ -208,7 +245,10 @@ class MainGuiSettingsLockTests(MainGuiTestBase):
         self.assertEqual(app.watch_folder_browse_button.state, "disabled")
         self.assertEqual(app.watch_folder_open_button.state, "normal")
         self.assertEqual(app.cache_folder_button.state, "normal")
+        self.assertEqual(app.output_folder_button.state, "normal")
+        self.assertEqual(app.html_report_button.state, "normal")
         self.assertEqual(app.create_doc_button.state, "disabled")
+        self.assertEqual(app.open_docs_button.state, "disabled")
         self.assertEqual(app.docs_input_entry.state, "disabled")
         self.assertEqual(app.other_button.state, "disabled")
 
@@ -223,10 +263,32 @@ class MainGuiSettingsLockTests(MainGuiTestBase):
         self.assertEqual(app.watch_folder_browse_button.state, "normal")
         self.assertEqual(app.watch_folder_open_button.state, "normal")
         self.assertEqual(app.cache_folder_button.state, "normal")
+        self.assertEqual(app.output_folder_button.state, "normal")
+        self.assertEqual(app.html_report_button.state, "normal")
         self.assertEqual(app.create_doc_button.state, "normal")
+        self.assertEqual(app.open_docs_button.state, "normal")
         self.assertEqual(app.docs_input_entry.state, "normal")
         self.assertEqual(app.other_button.state, "normal")
         app.update_windows_startup_ui_state.assert_called_once()
+
+    def test_get_current_config_data_includes_v12_ui_settings(self):
+        app = self.build_app()
+        app.dual_output_enabled.set(False)
+        app.dual_output_dir.set("E:/exports")
+        app.flexible_dedup_enabled.set(True)
+        app.flexible_dedup_ignore_fields.set("time, timestamp")
+        app.content_parsing_mode.set("block")
+        app.block_separator.set("---")
+        app.field_patterns_text.set("sender=^송신:(.+)\ntime=^시간:(.+)")
+
+        config_data = app.get_current_config_data()
+
+        self.assertFalse(config_data["dual_output_enabled"])
+        self.assertEqual(config_data["dual_output_dir"], "E:/exports")
+        self.assertEqual(config_data["content_parsing_mode"], "block")
+        self.assertEqual(config_data["block_separator"], "---")
+        self.assertEqual(config_data["field_patterns"], {"sender": "^송신:(.+)", "time": "^시간:(.+)"})
+        self.assertEqual(config_data["flexible_dedup"], {"enabled": True, "ignore_fields": ["time", "timestamp"]})
 
 
 class MainGuiHelperFunctionTests(unittest.TestCase):
@@ -521,6 +583,45 @@ class MainGuiDocsTargetTests(MainGuiTestBase):
         app.disable_settings_widgets.assert_called_once()
         fake_thread.start.assert_called_once()
         app.log.assert_any_call("감시 시작을 위해 대상 문서를 자동으로 확정했습니다.")
+
+    def test_start_monitoring_with_services_passes_v12_output_settings_to_backend(self):
+        app = self.build_app()
+        app.watch_folder.set("C:/watch")
+        app.docs_input.set("https://docs.google.com/document/d/EXAMPLE_DOC_ID_12345/edit")
+        app.settings_changed = False
+        app.stop_event = Mock()
+        app.parse_max_cache_size = Mock(return_value=5000)
+        app.log_threadsafe = Mock()
+        app.extracted_result_threadsafe = Mock()
+        app.disable_settings_widgets = Mock()
+        app.dual_output_enabled.set(True)
+        app.dual_output_dir.set("E:/exports")
+        app.flexible_dedup_enabled.set(True)
+        app.flexible_dedup_ignore_fields.set("time, timestamp")
+        app.content_parsing_mode.set("묶음으로 읽기")
+        app.block_separator.set("-----")
+        app.field_patterns_text.set("sender=^송신:(.+), time=^시간:(.+)")
+
+        with patch.object(main_gui, "ctk", self.fake_ctk), patch.object(
+            main_gui,
+            "run_monitoring",
+            Mock(),
+        ), patch.object(main_gui.os.path, "exists", return_value=True), patch.object(
+            main_gui.os.path,
+            "isdir",
+            return_value=True,
+        ), patch.object(main_gui.threading, "Thread", CapturingThread):
+            app._start_monitoring_with_services({"docs": object()})
+
+        self.assertIsNotNone(CapturingThread.latest)
+        self.assertTrue(CapturingThread.latest.started)
+        passed_config = CapturingThread.latest.args[0]
+        self.assertTrue(passed_config["dual_output_enabled"])
+        self.assertEqual(passed_config["dual_output_dir"], "E:/exports")
+        self.assertEqual(passed_config["content_parsing_mode"], "block")
+        self.assertEqual(passed_config["block_separator"], "-----")
+        self.assertEqual(passed_config["field_patterns"], {"sender": "^송신:(.+)", "time": "^시간:(.+)"})
+        self.assertEqual(passed_config["flexible_dedup"], {"enabled": True, "ignore_fields": ["time", "timestamp"]})
 
     def test_handle_google_auth_action_required_requests_foreground_reauth_on_confirm(self):
         app = self.build_app()

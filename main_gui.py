@@ -30,6 +30,11 @@ from PIL import Image, ImageDraw # Pillow에서 ImageDraw 추가
 import pystray
 
 try:
+    from src import __version__ as APP_VERSION
+except ImportError:
+    APP_VERSION = "1.2.0-alpha"
+
+try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
 except ImportError:
     DND_FILES = None
@@ -71,6 +76,7 @@ try:
         USER_CREDENTIALS_FILE_STR,
         LEGACY_CONFIG_FILE_STR,
         LOG_DIR_STR,
+        DUAL_OUTPUT_DIR_STR,
         get_effective_credentials_path,
     )
 except ImportError:
@@ -81,7 +87,13 @@ except ImportError:
     USER_CREDENTIALS_FILE_STR = "developer_credentials.json"
     LEGACY_CONFIG_FILE_STR = "config.json"
     LOG_DIR_STR = "logs"
+    DUAL_OUTPUT_DIR_STR = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "MessengerDocsAutoWriter", "output")
     get_effective_credentials_path = None
+
+try:
+    from src.auto_write_txt_to_docs.dual_output import DualOutputManager
+except ImportError:
+    DualOutputManager = None
 
 try:
     from src.auto_write_txt_to_docs.config_manager import (
@@ -102,12 +114,16 @@ except ImportError:
 try:
     from src.auto_write_txt_to_docs.autostart_utils import (
         is_windows_startup_enabled,
+        is_windows_startup_stale,
+        startup_launcher_matches_current,
         set_windows_startup_enabled,
         supports_windows_startup,
     )
 except ImportError:
     logging.error("자동 실행 유틸리티 모듈(autostart_utils.py)을 찾을 수 없습니다.")
     is_windows_startup_enabled = None
+    is_windows_startup_stale = None
+    startup_launcher_matches_current = None
     set_windows_startup_enabled = None
     supports_windows_startup = None
 
@@ -505,6 +521,7 @@ class MessengerDocsApp:
         self.current_activity_var = ctk.StringVar(value="현재 처리 파일: 대기 중")
         self.last_success_var = ctk.StringVar(value="마지막 성공: 아직 없음")
         self.last_result_var = ctk.StringVar(value="마지막 결과: 아직 없음")
+        self.app_version_var = ctk.StringVar(value=f"v{APP_VERSION}")
         self.advanced_settings_toggle_text = ctk.StringVar(value="고급 설정 펼치기")
         self.show_help_on_startup = tk.BooleanVar(value=True)  # 도움말 표시 여부
         self.show_success_notifications = tk.BooleanVar(value=True)
@@ -515,6 +532,13 @@ class MessengerDocsApp:
         self.use_regex_filter = tk.BooleanVar(value=False)  # 정규식 필터 사용 여부
         self.regex_pattern = ctk.StringVar(value="")  # 정규식 패턴
         self.max_cache_size = ctk.StringVar(value="10000")
+        self.dual_output_enabled = tk.BooleanVar(value=True)
+        self.dual_output_dir = ctk.StringVar(value=DUAL_OUTPUT_DIR_STR)
+        self.flexible_dedup_enabled = tk.BooleanVar(value=False)
+        self.flexible_dedup_ignore_fields = ctk.StringVar(value="")
+        self.content_parsing_mode = ctk.StringVar(value="한 줄씩 읽기")
+        self.block_separator = ctk.StringVar(value="-------------------------------------------------------------------------------")
+        self.field_patterns_text = ctk.StringVar(value="")
 
         self.is_monitoring = False
         self.monitoring_thread = None
@@ -565,6 +589,13 @@ class MessengerDocsApp:
         self.show_success_notifications.trace_add("write", self.on_setting_changed)
         self.play_event_sounds.trace_add("write", self.on_setting_changed)
         self.max_cache_size.trace_add("write", self.on_setting_changed)
+        self.dual_output_enabled.trace_add("write", self.on_setting_changed)
+        self.dual_output_dir.trace_add("write", self.on_setting_changed)
+        self.flexible_dedup_enabled.trace_add("write", self.on_setting_changed)
+        self.flexible_dedup_ignore_fields.trace_add("write", self.on_setting_changed)
+        self.content_parsing_mode.trace_add("write", self.on_setting_changed)
+        self.block_separator.trace_add("write", self.on_setting_changed)
+        self.field_patterns_text.trace_add("write", self.on_setting_changed)
         self.settings_changed = False
 
         # --- 상단 메뉴바 생성 ---
@@ -1270,6 +1301,8 @@ class MessengerDocsApp:
             supports_windows_startup
             and supports_windows_startup()
             and is_windows_startup_enabled
+            and is_windows_startup_stale
+            and startup_launcher_matches_current
             and set_windows_startup_enabled
         )
 
@@ -1298,9 +1331,9 @@ class MessengerDocsApp:
         if not self.can_manage_windows_startup():
             return
 
-        previous_state = is_windows_startup_enabled()
+        previous_state = startup_launcher_matches_current()
         desired_state = self.launch_on_windows_startup.get()
-        if desired_state == previous_state:
+        if desired_state == previous_state and not is_windows_startup_stale():
             return
 
         try:
@@ -1611,6 +1644,80 @@ class MessengerDocsApp:
         except Exception as e:
             self.log(f"오류: Google Docs 문서 열기 실패 - {e}")
             messagebox.showerror("오류", f"Google Docs 문서 열기 실패:\n{e}", parent=self.root)
+
+    def browse_output_folder(self):
+        foldername = filedialog.askdirectory(title="로컬 산출물 저장 폴더 선택")
+        if foldername:
+            self.dual_output_dir.set(foldername)
+            self.log(f"로컬 산출물 저장 폴더: {foldername}")
+
+    def open_output_folder(self):
+        output_dir = self.dual_output_dir.get().strip() or DUAL_OUTPUT_DIR_STR
+        self.open_folder_in_explorer(output_dir)
+
+    def open_today_html_report(self):
+        if not DualOutputManager:
+            messagebox.showerror("출력 오류", "HTML 리포트 기능을 불러오지 못했습니다.", parent=self.root)
+            return
+
+        output_dir = self.dual_output_dir.get().strip() or DUAL_OUTPUT_DIR_STR
+        try:
+            manager = DualOutputManager(output_dir)
+            html_path = manager.generate_html(log_func=self.log)
+            webbrowser.open(Path(html_path).resolve().as_uri())
+        except Exception as e:
+            self.log(f"오류: HTML 리포트 열기 실패 - {e}")
+            messagebox.showerror("출력 오류", f"HTML 리포트를 열지 못했습니다:\n{e}", parent=self.root)
+
+    def parse_ignore_fields_text(self):
+        return [
+            field.strip()
+            for field in (self.flexible_dedup_ignore_fields.get() or "").split(",")
+            if field.strip()
+        ]
+
+    def parse_field_patterns_text(self):
+        pattern_text = self.field_patterns_text.get() or ""
+        normalized_text = pattern_text.replace("\n", ",")
+        field_patterns = {}
+        for item in normalized_text.split(","):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            key, pattern = item.split("=", 1)
+            key = key.strip()
+            pattern = pattern.strip()
+            if key and pattern:
+                field_patterns[key] = pattern
+        return field_patterns
+
+    def normalize_content_parsing_mode(self, mode_text):
+        mode_map = {
+            "line": "line",
+            "라인 단위": "line",
+            "한 줄씩 읽기": "line",
+            "block": "block",
+            "블록 단위": "block",
+            "묶음으로 읽기": "block",
+        }
+        return mode_map.get(str(mode_text or "").strip(), "line")
+
+    def display_content_parsing_mode(self, mode_text):
+        return "묶음으로 읽기" if self.normalize_content_parsing_mode(mode_text) == "block" else "한 줄씩 읽기"
+
+    def format_ignore_fields_text(self, ignore_fields):
+        if isinstance(ignore_fields, (list, tuple, set)):
+            return ", ".join(str(field).strip() for field in ignore_fields if str(field).strip())
+        return str(ignore_fields or "")
+
+    def format_field_patterns_text(self, field_patterns):
+        if not isinstance(field_patterns, dict):
+            return ""
+        return ", ".join(
+            f"{key}={value}"
+            for key, value in field_patterns.items()
+            if str(key).strip() and str(value).strip()
+        )
 
     def build_filter_settings_snapshot(self):
         """현재 필터 설정 상태를 편집 가능한 스냅샷으로 반환한다."""
@@ -2314,16 +2421,27 @@ class MessengerDocsApp:
                 "readiness_var": self.readiness_var,
                 "google_connection_status_var": self.google_connection_status_var,
                 "save_state_var": self.save_state_var,
+                "app_version_var": self.app_version_var,
                 "current_activity_var": self.current_activity_var,
                 "last_success_var": self.last_success_var,
                 "last_result_var": self.last_result_var,
                 "advanced_settings_toggle_text": self.advanced_settings_toggle_text,
+                "dual_output_enabled": self.dual_output_enabled,
+                "dual_output_dir": self.dual_output_dir,
+                "flexible_dedup_enabled": self.flexible_dedup_enabled,
+                "flexible_dedup_ignore_fields": self.flexible_dedup_ignore_fields,
+                "content_parsing_mode": self.content_parsing_mode,
+                "block_separator": self.block_separator,
+                "field_patterns_text": self.field_patterns_text,
             },
             callbacks={
                 "optimize_memory": self.optimize_memory,
                 "browse_folder": self.browse_folder,
                 "open_watch_folder": lambda: self.open_folder_in_explorer(self.watch_folder.get()),
                 "open_cache_folder": lambda: self.open_folder_in_explorer(os.path.dirname(CACHE_FILE_STR)),
+                "browse_output_folder": self.browse_output_folder,
+                "open_output_folder": self.open_output_folder,
+                "open_today_html_report": self.open_today_html_report,
                 "show_filter_settings": self.show_filter_settings,
                 "create_new_google_doc": self.create_new_google_doc,
                 "focus_existing_docs_input": self.focus_existing_docs_input,
@@ -2346,6 +2464,7 @@ class MessengerDocsApp:
                 "toggle_advanced_settings": self.toggle_advanced_settings,
                 "on_activity_tab_changed": self.on_activity_tab_changed,
                 "test_google_connection": self.test_google_connection,
+                "show_credentials_wizard": self.show_credentials_wizard,
             },
             ctk_module=ctk,
             font_family=self.ui_font_family,
@@ -2396,7 +2515,10 @@ class MessengerDocsApp:
         autostart_supported = self.can_manage_windows_startup()
 
         if autostart_supported:
-            self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
+            if is_windows_startup_stale():
+                self.autostart_hint.set("이전 버전의 자동 실행 항목이 남아 있습니다. 스위치를 켜면 현재 버전 경로로 갱신됩니다.")
+            else:
+                self.autostart_hint.set("Windows 로그인 시 이 앱을 자동으로 실행합니다. 스위치를 바꾸면 시작프로그램 등록 상태가 바로 반영됩니다.")
             if hasattr(self, "autostart_switch"):
                 self.autostart_switch.configure(state="normal")
             return
@@ -2415,7 +2537,7 @@ class MessengerDocsApp:
             return
 
         try:
-            self.set_launch_on_windows_startup_value(is_windows_startup_enabled(), suppress_sync=True)
+            self.set_launch_on_windows_startup_value(startup_launcher_matches_current(), suppress_sync=True)
         except Exception as error:
             self.log(f"경고: Windows 자동 실행 상태 확인 실패 - {error}")
 
@@ -2425,8 +2547,8 @@ class MessengerDocsApp:
             return
 
         desired_state = self.launch_on_windows_startup.get()
-        current_state = is_windows_startup_enabled()
-        if desired_state == current_state:
+        current_state = startup_launcher_matches_current()
+        if desired_state == current_state and not is_windows_startup_stale():
             return
 
         if desired_state:
@@ -3212,6 +3334,15 @@ class MessengerDocsApp:
             # 테마 설정 추가
             "appearance_mode": self.appearance_mode.get(),
             "max_cache_size": self.parse_max_cache_size(fallback=10000),
+            "dual_output_enabled": self.dual_output_enabled.get(),
+            "dual_output_dir": self.dual_output_dir.get().strip() or DUAL_OUTPUT_DIR_STR,
+            "content_parsing_mode": self.normalize_content_parsing_mode(self.content_parsing_mode.get()),
+            "block_separator": self.block_separator.get(),
+            "field_patterns": self.parse_field_patterns_text(),
+            "flexible_dedup": {
+                "enabled": self.flexible_dedup_enabled.get(),
+                "ignore_fields": self.parse_ignore_fields_text(),
+            },
         }
 
     def apply_config_data(self, config_data):
@@ -3231,6 +3362,14 @@ class MessengerDocsApp:
         self.use_regex_filter.set(normalized_config.get("use_regex_filter", False))
         self.regex_pattern.set(normalized_config.get("regex_pattern", ""))
         self.max_cache_size.set(str(normalized_config.get("max_cache_size", 10000)))
+        self.dual_output_enabled.set(normalized_config.get("dual_output_enabled", True))
+        self.dual_output_dir.set(normalized_config.get("dual_output_dir", DUAL_OUTPUT_DIR_STR))
+        self.content_parsing_mode.set(self.display_content_parsing_mode(normalized_config.get("content_parsing_mode", "line")))
+        self.block_separator.set(normalized_config.get("block_separator", "-------------------------------------------------------------------------------"))
+        self.field_patterns_text.set(self.format_field_patterns_text(normalized_config.get("field_patterns", {})))
+        flexible_dedup = normalized_config.get("flexible_dedup", {})
+        self.flexible_dedup_enabled.set(bool(flexible_dedup.get("enabled", False)))
+        self.flexible_dedup_ignore_fields.set(self.format_ignore_fields_text(flexible_dedup.get("ignore_fields", [])))
 
         appearance_mode = normalized_config.get("appearance_mode", "System")
         self.appearance_mode.set(appearance_mode)
@@ -3335,15 +3474,16 @@ class MessengerDocsApp:
         self.is_monitoring = True
         self.stop_event.clear()
         
-        current_config = { 
-            "watch_folder": watch_folder, 
-            "docs_id": docs_id,
-            # 파일 필터링 설정 추가
-            "file_extensions": self.file_extensions.get(),
-            "use_regex_filter": self.use_regex_filter.get(),
-            "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else "",
-            "max_cache_size": max_cache_size,
-        }
+        current_config = self.get_current_config_data()
+        current_config.update(
+            {
+                "watch_folder": watch_folder,
+                "docs_id": docs_id,
+                "docs_input": docs_input_val,
+                "max_cache_size": max_cache_size,
+                "regex_pattern": self.regex_pattern.get() if self.use_regex_filter.get() else "",
+            }
+        )
         
         self.monitoring_thread = threading.Thread(
             target=run_monitoring, 
@@ -3408,6 +3548,8 @@ class MessengerDocsApp:
             always_enabled_widgets = {
                 getattr(self, "watch_folder_open_button", None),
                 getattr(self, "cache_folder_button", None),
+                getattr(self, "output_folder_button", None),
+                getattr(self, "html_report_button", None),
             }
             for child in self.settings_frame.winfo_children():
                 if isinstance(child, ctk.CTkFrame):

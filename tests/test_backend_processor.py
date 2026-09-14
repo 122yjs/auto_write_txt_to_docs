@@ -71,8 +71,9 @@ class FakeTimer:
 
 
 class FakeDocsService:
-    def __init__(self, should_fail=False):
+    def __init__(self, should_fail=False, exception_to_raise=None):
         self.should_fail = should_fail
+        self.exception_to_raise = exception_to_raise
         self.calls = []
 
     def documents(self):
@@ -83,9 +84,30 @@ class FakeDocsService:
         return self
 
     def execute(self):
+        if self.exception_to_raise:
+            raise self.exception_to_raise
         if self.should_fail:
             raise RuntimeError("테스트용 Docs 실패")
         return {}
+
+
+class FakeDualOutputManager:
+    def __init__(self):
+        self.raw_calls = []
+        self.deduped_calls = []
+        self.html_calls = []
+
+    def write_raw(self, filepath, lines):
+        self.raw_calls.append((filepath, list(lines)))
+
+    def write_deduped(self, filepath, lines, duplicate_count=0):
+        self.deduped_calls.append((filepath, list(lines), duplicate_count))
+
+    def generate_html(self, date_str=None, log_func=None):
+        self.html_calls.append(date_str)
+        if log_func:
+            log_func("HTML 리포트 생성 완료: fake-report.html")
+        return "fake-report.html"
 
 
 class BackendProcessorTests(unittest.TestCase):
@@ -94,6 +116,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.processed_file_states.clear()
         backend_processor.file_encodings.clear()
         backend_processor.added_lines_cache.clear()
+        backend_processor.block_dedupe_cache.clear()
         backend_processor.file_queue = queue.Queue()
         backend_processor.processed_state_dirty = False
         backend_processor.processed_state_save_timer = None
@@ -102,9 +125,11 @@ class BackendProcessorTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         self.original_processed_state_file = backend_processor.PROCESSED_STATE_FILE
         self.original_line_cache_file = backend_processor.LINE_CACHE_FILE
+        self.original_block_cache_file = backend_processor.BLOCK_CACHE_FILE
         self.original_max_global_cache_size = backend_processor.MAX_GLOBAL_CACHE_SIZE
         backend_processor.PROCESSED_STATE_FILE = os.path.join(self.temp_dir.name, "processed_state.json")
         backend_processor.LINE_CACHE_FILE = os.path.join(self.temp_dir.name, "added_lines_cache.json")
+        backend_processor.BLOCK_CACHE_FILE = os.path.join(self.temp_dir.name, "block_dedupe_cache.json")
         self.timer_patcher = patch.object(backend_processor.threading, "Timer", FakeTimer)
         self.timer_patcher.start()
 
@@ -112,6 +137,7 @@ class BackendProcessorTests(unittest.TestCase):
         self.timer_patcher.stop()
         backend_processor.PROCESSED_STATE_FILE = self.original_processed_state_file
         backend_processor.LINE_CACHE_FILE = self.original_line_cache_file
+        backend_processor.BLOCK_CACHE_FILE = self.original_block_cache_file
         backend_processor.MAX_GLOBAL_CACHE_SIZE = self.original_max_global_cache_size
         backend_processor.processed_state_dirty = False
         backend_processor.processed_state_save_timer = None
@@ -172,7 +198,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.remember_global_lines(["둘줄", "넷줄"])
 
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "둘줄", "넷줄"],
         )
 
@@ -181,7 +207,7 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.load_line_cache(lambda _message: None)
 
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "둘줄", "넷줄"],
         )
 
@@ -199,7 +225,7 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(configured_size, 2)
         self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, 2)
         self.assertEqual(
-            list(backend_processor.added_lines_cache.keys()),
+            list(backend_processor.added_lines_cache.values()),
             ["셋줄", "넷줄"],
         )
         self.assertTrue(any("라인 캐시 최대 크기 설정 - 2개" in message for message in logs))
@@ -215,6 +241,57 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(configured_size, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
         self.assertEqual(backend_processor.MAX_GLOBAL_CACHE_SIZE, backend_processor.DEFAULT_MAX_GLOBAL_CACHE_SIZE)
         self.assertTrue(any("기본값" in message for message in logs))
+
+    def test_save_and_load_block_cache_persists_fingerprints(self):
+        from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+        parser = StructuredBlockParser(block_separator="-" * 15)
+        blocks = parser.parse("송신:홍길동\n내용:같은 내용\n", source_file="old.txt")
+        expected_fingerprint = blocks[0].get_fingerprint()
+
+        backend_processor.remember_global_blocks(blocks)
+        backend_processor.save_block_cache(lambda _message: None)
+        backend_processor.block_dedupe_cache.clear()
+        backend_processor.load_block_cache(lambda _message: None)
+
+        self.assertIn(expected_fingerprint, backend_processor.block_dedupe_cache)
+
+    def test_warm_block_cache_from_processed_files_prevents_readding_existing_block_content(self):
+        old_filepath = self.create_named_file(
+            "old_block.txt",
+            "송신:홍길동\n시간:2026-05-08 10:00:00:000\n내용:이미 기록된 내용\n",
+        )
+        duplicate_filepath = self.create_named_file(
+            "new_duplicate_block.txt",
+            "송신:홍길동\n시간:2026-05-08 10:00:00:000\n내용:이미 기록된 내용\n",
+        )
+        backend_processor.mark_file_processed(
+            old_filepath,
+            os.path.getsize(old_filepath),
+            1.0,
+            file_identity=backend_processor.build_file_identity_from_stat(os.stat(old_filepath)),
+        )
+        backend_processor.block_dedupe_cache.clear()
+
+        logs = []
+        config = {
+            "docs_id": "doc-block",
+            "content_parsing_mode": "block",
+            "block_separator": "-" * 15,
+            "field_patterns": {},
+        }
+        backend_processor.warm_block_cache_from_processed_files(config, logs.append)
+
+        fake_docs = FakeDocsService()
+        backend_processor.process_file(
+            duplicate_filepath,
+            config,
+            {"docs": fake_docs},
+            logs.append,
+        )
+
+        self.assertEqual(len(fake_docs.calls), 0)
+        self.assertTrue(any("중복 블록만 감지" in message for message in logs))
 
     def test_build_extraction_record_includes_file_title_and_extracted_time(self):
         filepath = os.path.join(self.temp_dir.name, "대화로그.txt")
@@ -292,6 +369,27 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(len(fake_docs_service.calls), 1)
         self.assertTrue(any("Docs 업데이트 중 예외 발생" in message for message in logs))
 
+    def test_docs_update_refresh_error_requires_reauth_without_retry(self):
+        filepath = self.create_temp_file("reauth required\n")
+        logs = []
+        refresh_error = backend_processor.RefreshError("invalid_grant: Token has been expired or revoked.")
+        fake_docs_service = FakeDocsService(exception_to_raise=refresh_error)
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-refresh"},
+            {"docs": fake_docs_service},
+            logs.append,
+        )
+
+        state = backend_processor.processed_file_states[filepath]
+        self.assertNotIn("size", state)
+        self.assertNotIn("last_byte_offset", state)
+        self.assertFalse(state.get("retry_scheduled"))
+        self.assertEqual(len(FakeTimer.instances), 1)
+        self.assertEqual(len(fake_docs_service.calls), 1)
+        self.assertTrue(any("Google reauthentication required" in message for message in logs))
+
     def test_successful_docs_update_marks_file_processed(self):
         filepath = self.create_temp_file("정상 처리 테스트\n")
         logs = []
@@ -314,7 +412,7 @@ class BackendProcessorTests(unittest.TestCase):
             backend_processor.hash_line_for_dedupe("정상 처리 테스트"),
             state["seen_line_hashes"],
         )
-        self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache)
+        self.assertIn("정상 처리 테스트", backend_processor.added_lines_cache.values())
         self.assertEqual(len(fake_docs_service.calls), 1)
         inserted_text = fake_docs_service.calls[0][1]["requests"][0]["insertText"]["text"]
         self.assertIn("본래 파일 제목:", inserted_text)
@@ -323,6 +421,27 @@ class BackendProcessorTests(unittest.TestCase):
         self.assertEqual(extracted_results[0]["file_title"], os.path.basename(filepath))
         self.assertIn("정상 처리 테스트", extracted_results[0]["full_text"])
         self.assertTrue(any("처리 완료" in message for message in logs))
+
+    def test_dual_output_enabled_does_not_skip_docs_update(self):
+        filepath = self.create_temp_file("원본 줄\n중복 줄\n")
+        logs = []
+        fake_docs_service = FakeDocsService()
+        dual_output = FakeDualOutputManager()
+        backend_processor.remember_global_lines(["중복 줄"])
+
+        backend_processor.process_file(
+            filepath,
+            {"docs_id": "doc-dual", "dual_output_enabled": True},
+            {"docs": fake_docs_service},
+            logs.append,
+            dual_output_manager=dual_output,
+        )
+
+        self.assertEqual(len(fake_docs_service.calls), 1)
+        self.assertEqual(dual_output.raw_calls[0][1], ["원본 줄", "중복 줄"])
+        self.assertEqual(dual_output.deduped_calls[0][1], ["원본 줄"])
+        self.assertEqual(dual_output.deduped_calls[0][2], 1)
+        self.assertEqual(len(dual_output.html_calls), 1)
 
     def test_duplicate_only_new_file_records_filename_to_docs(self):
         filepath = self.create_temp_file("중복 줄\n")
@@ -361,6 +480,14 @@ class BackendProcessorTests(unittest.TestCase):
         backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
         with open(filepath, "a", encoding="utf-8", newline="") as source_file:
             source_file.write("같은 줄\n")
+
+        current_stat = os.stat(filepath)
+        backend_processor.processed_file_states[filepath]["file_ctime_ns"] = int(
+            getattr(current_stat, 'st_ctime_ns', int(current_stat.st_ctime * 1_000_000_000))
+        )
+        backend_processor.processed_file_states[filepath]["file_mtime_ns"] = int(
+            getattr(current_stat, 'st_mtime_ns', int(current_stat.st_mtime * 1_000_000_000))
+        )
 
         logs = []
         second_docs_service = FakeDocsService()
@@ -481,6 +608,14 @@ class BackendProcessorTests(unittest.TestCase):
         with open(filepath, "w", encoding="utf-8", newline="") as f:
             f.write("같은 줄\n같은 줄\n")
 
+        current_stat = os.stat(filepath)
+        backend_processor.processed_file_states[filepath]["file_ctime_ns"] = int(
+            getattr(current_stat, 'st_ctime_ns', int(current_stat.st_ctime * 1_000_000_000))
+        )
+        backend_processor.processed_file_states[filepath]["file_mtime_ns"] = int(
+            getattr(current_stat, 'st_mtime_ns', int(current_stat.st_mtime * 1_000_000_000))
+        )
+
         second_logs = []
         second_docs_service = FakeDocsService()
         backend_processor.process_file(
@@ -565,6 +700,228 @@ class BackendProcessorTests(unittest.TestCase):
         save_line_cache_mock.assert_not_called()
         self.assertTrue(any("오류: Google 재인증 필요" in message for message in logs))
         self.assertTrue(any("브라우저 인증을 시작하지 않습니다" in message for message in logs))
+
+
+class TestProvenanceTracking(unittest.TestCase):
+    """출처 추적(Provenance) 기능 테스트"""
+
+    def setUp(self):
+        backend_processor.processed_file_states = {}
+        backend_processor.file_encodings = {}
+
+    def test_remember_file_lines_records_provenance(self):
+        """remember_file_lines가 출처를 기록하는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A", "line B"],
+            source_filename="backup-2026-03-18_130726.txt"
+        )
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+        prov = state.get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+        hash_b = backend_processor.hash_line_for_dedupe("line B")
+
+        self.assertIn(hash_a, prov)
+        self.assertIn(hash_b, prov)
+        self.assertEqual(prov[hash_a], ["backup-2026-03-18_130726.txt"])
+        self.assertEqual(prov[hash_b], ["backup-2026-03-18_130726.txt"])
+
+    def test_remember_file_lines_appends_multiple_sources(self):
+        """동일 라인이 여러 출처에서 발견되면 출처 목록이 누적되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-B.txt"
+        )
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+        prov = state.get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertEqual(prov[hash_a], ["backup-A.txt", "backup-B.txt"])
+
+    def test_reset_file_processing_state_clears_provenance(self):
+        """파일 재생성 시 provenance가 초기화되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        backend_processor.reset_file_processing_state("/tmp/test.txt")
+        state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+
+        self.assertNotIn("provenance", state)
+        self.assertEqual(state.get("seen_line_hashes"), set())
+
+    def test_build_serializable_processed_state_includes_provenance(self):
+        """직렬화 시 provenance가 포함되는지 확인"""
+        backend_processor.remember_file_lines(
+            "/tmp/test.txt",
+            ["line A"],
+            source_filename="backup-A.txt"
+        )
+        serializable = backend_processor._build_serializable_processed_state()
+        prov = serializable.get("/tmp/test.txt", {}).get("provenance", {})
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertIn(hash_a, prov)
+        self.assertEqual(prov[hash_a], ["backup-A.txt"])
+
+    def test_load_processed_state_restores_provenance(self):
+        """로드 시 provenance가 복원되는지 확인"""
+        raw_state = {
+            "/tmp/test.txt": {
+                "last_byte_offset": 100,
+                "seen_line_hashes": [],
+                "provenance": {
+                    "abc123": ["backup-A.txt", "backup-B.txt"]
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(raw_state, f)
+            temp_path = f.name
+
+        original_path = backend_processor.PROCESSED_STATE_FILE
+        backend_processor.PROCESSED_STATE_FILE = temp_path
+        try:
+            backend_processor.load_processed_state(lambda msg: None)
+            state = backend_processor.processed_file_states.get("/tmp/test.txt", {})
+            prov = state.get("provenance", {})
+
+            self.assertIn("abc123", prov)
+            self.assertEqual(prov["abc123"], ["backup-A.txt", "backup-B.txt"])
+        finally:
+            backend_processor.PROCESSED_STATE_FILE = original_path
+            os.unlink(temp_path)
+
+
+
+class TestDuplicateStats(unittest.TestCase):
+    def setUp(self):
+        backend_processor.added_lines_cache.clear()
+        backend_processor.duplicate_stats.clear()
+
+    def test_remember_global_lines_tracks_duplicate_stats(self):
+        backend_processor.remember_global_lines(["line A", "line B"])
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+        hash_b = backend_processor.hash_line_for_dedupe("line B")
+
+        self.assertIn(hash_a, backend_processor.duplicate_stats)
+        self.assertIn(hash_b, backend_processor.duplicate_stats)
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["total_occurrences"], 1)
+        self.assertEqual(backend_processor.duplicate_stats[hash_b]["total_occurrences"], 1)
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["line_preview"], "line A")
+
+    def test_remember_global_lines_increments_existing_stats(self):
+        backend_processor.remember_global_lines(["line A"])
+        backend_processor.remember_global_lines(["line A"])
+        hash_a = backend_processor.hash_line_for_dedupe("line A")
+
+        self.assertEqual(backend_processor.duplicate_stats[hash_a]["total_occurrences"], 2)
+
+    def test_get_top_duplicate_lines_returns_sorted_list(self):
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["common"])
+        backend_processor.remember_global_lines(["rare"])
+        backend_processor.remember_global_lines(["rare"])
+
+        top = backend_processor.get_top_duplicate_lines(limit=2)
+        self.assertEqual(len(top), 2)
+        self.assertEqual(top[0]["line_preview"], "common")
+        self.assertEqual(top[0]["total_occurrences"], 3)
+        self.assertEqual(top[1]["line_preview"], "rare")
+        self.assertEqual(top[1]["total_occurrences"], 2)
+
+    def test_save_and_load_duplicate_stats(self):
+        backend_processor.remember_global_lines(["persisted line"])
+        hash_val = backend_processor.hash_line_for_dedupe("persisted line")
+        original_stats = dict(backend_processor.duplicate_stats)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(original_stats, f)
+            temp_path = f.name
+
+        backend_processor.duplicate_stats.clear()
+        original_path = backend_processor.DUPLICATE_STATS_FILE
+        backend_processor.DUPLICATE_STATS_FILE = temp_path
+        try:
+            backend_processor.load_duplicate_stats(lambda msg: None)
+            self.assertIn(hash_val, backend_processor.duplicate_stats)
+            self.assertEqual(backend_processor.duplicate_stats[hash_val]["total_occurrences"], 1)
+        finally:
+            backend_processor.DUPLICATE_STATS_FILE = original_path
+            os.unlink(temp_path)
+
+
+class TestBlockLevelDeduplication(unittest.TestCase):
+    def setUp(self):
+        backend_processor.added_lines_cache.clear()
+        backend_processor.block_dedupe_cache.clear()
+
+    def test_block_mode_skips_duplicate_blocks(self):
+        content = (
+            "송신:이슬아\n"
+            "시간:2026-03-18 13:04:58:000\n"
+            "제목:감사합니다\n"
+            "내용:감사합니다\n"
+        )
+        filepath = os.path.join(tempfile.mkdtemp(), "block_test.txt")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        fake_docs = FakeDocsService()
+        extracted_results = []
+        backend_processor.process_file(
+            filepath,
+            {
+                "docs_id": "doc-block",
+                "content_parsing_mode": "block",
+                "block_separator": "-" * 15,
+                "field_patterns": {
+                    "sender": "^송신:(.+)",
+                    "time": "^시간:(.+)",
+                    "title": "^제목:(.+)",
+                    "body": "^내용:(.+)",
+                },
+            },
+            {"docs": fake_docs},
+            lambda _message: None,
+            extracted_result_callback=extracted_results.append,
+        )
+        self.assertEqual(len(fake_docs.calls), 1)
+        self.assertEqual(len(extracted_results), 1)
+        self.assertEqual(extracted_results[0]["file_title"], "block_test.txt")
+        self.assertIn("내용:감사합니다", extracted_results[0]["full_text"])
+        inserted_text = fake_docs.calls[0][1]["requests"][0]["insertText"]["text"]
+        self.assertNotIn("제목:감사합니다", inserted_text)
+        self.assertIn("내용:감사합니다", inserted_text)
+
+        # Second run with same file content should skip docs
+        fake_docs2 = FakeDocsService()
+        backend_processor.processed_file_states[filepath]["last_attempt_time"] = 0
+        backend_processor.process_file(
+            filepath,
+            {
+                "docs_id": "doc-block",
+                "content_parsing_mode": "block",
+                "block_separator": "-" * 15,
+                "field_patterns": {
+                    "sender": "^송신:(.+)",
+                    "time": "^시간:(.+)",
+                    "title": "^제목:(.+)",
+                    "body": "^내용:(.+)",
+                },
+            },
+            {"docs": fake_docs2},
+            lambda _message: None,
+        )
+        self.assertEqual(len(fake_docs2.calls), 0)
 
 
 if __name__ == "__main__":

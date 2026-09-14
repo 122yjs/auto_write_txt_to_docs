@@ -220,6 +220,7 @@ https://docs.google.com/document/d/문서ID/edit
 - 상단 메뉴바의 `설정 > 시작 시 새 버전 확인`에서 시작 시 최신 버전 확인 여부를 켜거나 끌 수 있습니다.
 - 상단 메뉴바의 `설정 > 새 버전 확인`을 누르면 공식 GitHub 릴리즈를 즉시 조회합니다.
 - 새 버전이 있으면 릴리즈 페이지를 열지 선택할 수 있습니다.
+- 설치관리자 버전은 같은 설치 위치에 덮어써서 업데이트하므로 이전 버전과 중복 설치될 가능성을 줄입니다.
 - 자동 업데이트는 하지 않고, 다운로드 페이지 안내만 제공합니다.
 
 ## 설정, 로그, 캐시는 어디에 저장되나요?
@@ -239,12 +240,25 @@ Windows에서는 프로젝트 폴더가 아니라 사용자 프로필 아래에 
 - `cache\processed_state.json`: 파일별 마지막 처리 상태
 - `cache\token.json`: Google 로그인 토큰
 - `logs\`: 실행 로그
+- `output\raw\`: 중복 포함 원본 로컬 산출물
+- `output\deduped\`: 중복 제거 후 로컬 산출물
+- `output\html\`: 날짜별 HTML 리포트
 
 예시 실제 경로:
 
 ```text
 C:\Users\사용자이름\AppData\Roaming\MessengerDocsAutoWriter\
 ```
+
+## v1.2.0 설정은 어디에서 바꾸나요?
+
+메인 화면의 `고급 설정`을 펼치면 v1.2.0에서 추가된 설정을 UI에서 바로 조정할 수 있습니다.
+
+- `로컬 산출물 저장`: raw, deduped, HTML 리포트 저장 여부와 저장 위치
+- `출력 폴더 열기`: 실제 산출물 저장 폴더 바로 열기
+- `오늘 HTML 리포트`: 오늘 저장된 raw/deduped 내용을 HTML로 생성하고 열기
+- `중복 판정 제외 필드`: `time`처럼 중복 비교에서 제외할 필드
+- `콘텐츠 파싱 방식`: 일반 줄 단위 또는 블록 단위 처리 선택
 
 ## 문제 해결
 
@@ -325,10 +339,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -ExcludeBundledCredentials
 ```
 
+설치관리자까지 만들려면 Inno Setup의 `iscc` 명령이 필요합니다. 설치관리자를 건너뛰고 zip/standalone만 만들 때는 `-SkipInstaller`를 추가합니다.
+
 ### 빌드 결과 위치
 
 - 실행 폴더: `dist\MessengerDocsAutoWriter\`
 - 배포 zip: `release\MessengerDocsAutoWriter-win64-portable.zip`
+- 단일 실행 파일: `release\MessengerDocsAutoWriter-standalone.exe`
+- 설치관리자: `release\MessengerDocsAutoWriterSetup-v1.2.0-alpha.exe`
+
+설치관리자 버전은 다음 업데이트 때 같은 앱 ID와 설치 경로를 사용합니다. 사용자 설정과 캐시는 `%APPDATA%\MessengerDocsAutoWriter`에 남기 때문에 앱을 다시 설치해도 보존됩니다.
 
 ## 프로젝트 구조
 

@@ -7,6 +7,11 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import queue
 import threading
+try:
+    from google.auth.exceptions import RefreshError
+except ImportError:
+    class RefreshError(Exception):
+        pass
 from googleapiclient.errors import HttpError
 import traceback
 import logging
@@ -16,25 +21,40 @@ from datetime import datetime # Docs 헤더에 타임스탬프 사용 위해 유
 
 # google_auth 모듈 임포트
 try:
-    from .google_auth import GoogleAuthActionRequired, get_google_services
+    from .google_auth import GoogleAuthActionRequired, get_google_services, quarantine_token_file
 except ImportError:
     logging.error("ERROR: google_auth.py module is missing. Google API authentication is disabled.")
     GoogleAuthActionRequired = Exception
     get_google_services = None
+    quarantine_token_file = None
 
 try:
     from .path_utils import (
+        BLOCK_CACHE_FILE_STR,
         CACHE_FILE_STR,
+        DUPLICATE_STATS_FILE_STR,
         LEGACY_CACHE_FILE_STR,
         LOG_DIR_STR,
         PROCESSED_STATE_FILE_STR,
     )
 except ImportError:
     project_root_fallback = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    BLOCK_CACHE_FILE_STR = os.path.join(project_root_fallback, "block_dedupe_cache.json")
     CACHE_FILE_STR = os.path.join(project_root_fallback, "added_lines_cache.json")
+    DUPLICATE_STATS_FILE_STR = os.path.join(project_root_fallback, "duplicate_stats.json")
     LEGACY_CACHE_FILE_STR = CACHE_FILE_STR
     LOG_DIR_STR = os.path.join(project_root_fallback, "logs")
     PROCESSED_STATE_FILE_STR = os.path.join(project_root_fallback, "processed_state.json")
+
+try:
+    from .dual_output import get_dual_output_manager
+except ImportError:
+    from src.auto_write_txt_to_docs.dual_output import get_dual_output_manager
+
+try:
+    from .flexible_dedup import get_flexible_strategy
+except ImportError:
+    from src.auto_write_txt_to_docs.flexible_dedup import get_flexible_strategy
 
 # --- 전역 변수 및 상수 정의 ---
 file_queue = queue.Queue()
@@ -80,7 +100,11 @@ def setup_backend_logging():
 
 # 라인 캐시 관련 설정
 added_lines_cache = OrderedDict() # 최근 N개 전역 라인 캐시 (중복 방지)
+duplicate_stats = {}
+block_dedupe_cache = OrderedDict()
 LINE_CACHE_FILE = CACHE_FILE_STR
+BLOCK_CACHE_FILE = BLOCK_CACHE_FILE_STR
+DUPLICATE_STATS_FILE = DUPLICATE_STATS_FILE_STR
 PROCESSED_STATE_FILE = PROCESSED_STATE_FILE_STR
 
 
@@ -158,6 +182,17 @@ def build_duplicate_only_record(filepath, duplicate_line_count, extracted_at=Non
     }
 
 
+def write_dual_output_files(dual_output_manager, filepath, raw_lines, deduped_lines, log_func=None):
+    """raw/deduped/html 로컬 산출물을 한 번에 저장합니다."""
+    if not dual_output_manager:
+        return None
+
+    duplicate_count = max(0, len(raw_lines) - len(deduped_lines))
+    dual_output_manager.write_raw(filepath, raw_lines)
+    dual_output_manager.write_deduped(filepath, deduped_lines, duplicate_count)
+    return dual_output_manager.generate_html(log_func=log_func)
+
+
 def get_file_state(filepath):
     """파일별 처리 상태 딕셔너리를 반환합니다."""
     with processed_state_lock:
@@ -227,30 +262,162 @@ def get_file_seen_hashes(filepath):
         return seen_hashes
 
 
-def remember_file_lines(filepath, lines):
-    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다."""
+def remember_file_lines(filepath, lines, source_filename=None):
+    """현재 파일에서 확인한 라인들을 파일별 중복 상태에 기록합니다. 출처도 함께 기록합니다."""
     if not lines:
         return
 
+    source = source_filename or os.path.basename(filepath)
     with processed_state_lock:
+        state = get_file_state(filepath)
         seen_hashes = get_file_seen_hashes(filepath)
+        provenance = state.setdefault('provenance', {})
+
         for line in lines:
-            seen_hashes.add(hash_line_for_dedupe(line))
+            h = hash_line_for_dedupe(line)
+            seen_hashes.add(h)
+            if h not in provenance:
+                provenance[h] = []
+            if source not in provenance[h]:
+                provenance[h].append(source)
 
 
 def remember_global_lines(lines):
-    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다."""
+    """최근 N개 범위만 유지하는 전역 라인 캐시에 기록합니다. 키는 SHA256 해시를 사용합니다."""
     if not lines:
         return
 
+    current_time = time.time()
     for line in lines:
-        normalized_line = str(line)
-        if normalized_line in added_lines_cache:
-            added_lines_cache.move_to_end(normalized_line)
+        h = hash_line_for_dedupe(line)
+        if h in added_lines_cache:
+            added_lines_cache.move_to_end(h)
+            if h in duplicate_stats:
+                duplicate_stats[h]["total_occurrences"] += 1
+                duplicate_stats[h]["last_seen_at"] = current_time
         else:
-            added_lines_cache[normalized_line] = None
+            added_lines_cache[h] = line
+            if h not in duplicate_stats:
+                preview = line[:80] + "..." if len(line) > 80 else line
+                duplicate_stats[h] = {
+                    "line_preview": preview,
+                    "total_occurrences": 1,
+                    "first_seen_at": current_time,
+                    "last_seen_at": current_time,
+                }
+            else:
+                duplicate_stats[h]["total_occurrences"] += 1
+                duplicate_stats[h]["last_seen_at"] = current_time
 
     optimize_cache_size(None)
+
+
+def remember_global_blocks(blocks):
+    if not blocks:
+        return
+    for block in blocks:
+        fp = block.get_fingerprint()
+        if fp in block_dedupe_cache:
+            block_dedupe_cache.move_to_end(fp)
+        else:
+            block_dedupe_cache[fp] = block
+
+
+def get_new_blocks(blocks):
+    return [b for b in blocks if b.get_fingerprint() not in block_dedupe_cache]
+
+
+def load_block_cache(log_func):
+    """블록 단위 중복 캐시를 디스크에서 복원합니다."""
+    global block_dedupe_cache
+
+    if not os.path.exists(BLOCK_CACHE_FILE):
+        log_func(f"백엔드: 블록 중복 캐시 파일({BLOCK_CACHE_FILE}) 없음. 새로 시작합니다.")
+        block_dedupe_cache = OrderedDict()
+        return
+
+    try:
+        with open(BLOCK_CACHE_FILE, "r", encoding="utf-8") as f:
+            loaded_hashes = json.load(f)
+
+        restored_cache = OrderedDict()
+        if isinstance(loaded_hashes, list):
+            for item in loaded_hashes:
+                if item:
+                    restored_cache[str(item)] = None
+        elif isinstance(loaded_hashes, dict):
+            for item in loaded_hashes.keys():
+                if item:
+                    restored_cache[str(item)] = None
+        else:
+            raise ValueError("블록 중복 캐시 최상위 구조가 list/dict가 아닙니다.")
+
+        block_dedupe_cache = restored_cache
+        log_func(f"백엔드: 블록 중복 캐시({BLOCK_CACHE_FILE}) 로드됨 ({len(block_dedupe_cache)}개).")
+    except Exception as e:
+        block_dedupe_cache = OrderedDict()
+        log_func(f"경고: 블록 중복 캐시 로드 실패 - {e}")
+
+
+def save_block_cache(log_func):
+    """블록 단위 중복 캐시를 디스크에 저장합니다."""
+    try:
+        target_dir = os.path.dirname(BLOCK_CACHE_FILE)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        with open(BLOCK_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(block_dedupe_cache.keys()), f, ensure_ascii=False, indent=2)
+        log_func(f"백엔드: 블록 중복 캐시 저장 완료 ({BLOCK_CACHE_FILE}, {len(block_dedupe_cache)}개).")
+    except Exception as e:
+        log_func(f"경고: 블록 중복 캐시 저장 실패 - {e}")
+
+
+def warm_block_cache_from_processed_files(config, log_func):
+    """처리 완료 이력이 있는 기존 파일을 블록 캐시에 예열해 재시작 후 중복 추가를 막습니다."""
+    if not isinstance(config, dict) or config.get("content_parsing_mode") != "block":
+        return 0
+
+    try:
+        from .block_parser import StructuredBlockParser
+    except ImportError:
+        from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+    parser = StructuredBlockParser(
+        block_separator=config.get("block_separator", "-------------------------------------------------------------------------------"),
+        field_patterns=config.get("field_patterns", {}),
+    )
+    flexible_strategy = get_flexible_strategy(config)
+    warmed_count = 0
+
+    with processed_state_lock:
+        processed_paths = list(processed_file_states.keys())
+
+    for processed_path in processed_paths:
+        if not processed_path or not os.path.exists(processed_path):
+            continue
+        try:
+            content = read_file_with_multiple_encodings(processed_path, 0, log_func)
+            if not content or not content.strip():
+                continue
+            blocks = parser.parse(content, source_file=processed_path)
+            valid_blocks = [block for block in blocks if parser.validate_block(block)[0]]
+            if not valid_blocks:
+                continue
+            before_count = len(block_dedupe_cache)
+            if flexible_strategy:
+                flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                remember_global_blocks(valid_blocks)
+            warmed_count += len(block_dedupe_cache) - before_count
+        except Exception as e:
+            logging.getLogger("backend_processor").warning(
+                f"블록 중복 캐시 예열 실패: {processed_path} - {e}"
+            )
+
+    if warmed_count:
+        log_func(f"백엔드: 기존 처리 파일에서 블록 중복 캐시 예열 완료 ({warmed_count}개 추가).")
+        save_block_cache(log_func)
+    return warmed_count
 
 
 def get_last_attempt_time(filepath):
@@ -265,6 +432,24 @@ def get_last_successful_offset(filepath):
     with processed_state_lock:
         state = processed_file_states.get(filepath, {})
     return state.get('last_byte_offset', state.get('size', 0))
+
+
+def get_top_duplicate_lines(limit=10):
+    sorted_stats = sorted(
+        duplicate_stats.items(),
+        key=lambda item: item[1]["total_occurrences"],
+        reverse=True,
+    )
+    return [
+        {
+            "hash": h,
+            "line_preview": stat["line_preview"],
+            "total_occurrences": stat["total_occurrences"],
+            "first_seen_at": stat["first_seen_at"],
+            "last_seen_at": stat["last_seen_at"],
+        }
+        for h, stat in sorted_stats[:limit]
+    ]
 
 
 def mark_processing_attempt(filepath, current_time):
@@ -286,6 +471,7 @@ def reset_file_processing_state(filepath):
         state.pop('retry_scheduled', None)
         state.pop('file_ctime_ns', None)
         state.pop('file_mtime_ns', None)
+        state.pop('provenance', None)
         state['seen_line_hashes'] = set()
         if 'timestamp' in state:
             del state['timestamp']
@@ -346,6 +532,26 @@ def schedule_retry(filepath, log_func, reason, current_time=None):
     retry_timer.start()
 
 
+def handle_google_refresh_error(filepath, log_func, error, backend_logger):
+    """Stop retrying when Google's stored refresh token is expired or revoked."""
+    log_func(
+        "오류: Google reauthentication required - stored token expired or revoked. "
+        "Reconnect your Google account, then restart monitoring."
+    )
+    backend_logger.warning(
+        f"Google reauthentication required for {filepath}: {error}",
+        exc_info=True,
+    )
+    if quarantine_token_file:
+        quarantined_path = quarantine_token_file(log_func, reason_code="refresh_failed_during_docs_update")
+        if quarantined_path:
+            log_func(f"Google token quarantined: {quarantined_path}")
+    with processed_state_lock:
+        state = get_file_state(filepath)
+        state['retry_scheduled'] = False
+    schedule_processed_state_save(log_func)
+
+
 def remove_file_processing_state(filepath):
     """파일 처리 상태와 인코딩 캐시를 함께 제거합니다."""
     with processed_state_lock:
@@ -358,6 +564,13 @@ def _build_serializable_processed_state():
     with processed_state_lock:
         serializable_state = {}
         for filepath, state in processed_file_states.items():
+            serializable_provenance = {}
+            prov = state.get('provenance', {})
+            if isinstance(prov, dict):
+                for h, sources in prov.items():
+                    if isinstance(sources, (list, set, tuple)):
+                        serializable_provenance[str(h)] = sorted(str(s) for s in sources if s)
+
             serializable_state[filepath] = {
                 'last_byte_offset': int(state.get('last_byte_offset', state.get('size', 0))),
                 'size': int(state.get('last_byte_offset', state.get('size', 0))),
@@ -367,6 +580,7 @@ def _build_serializable_processed_state():
                 ),
                 'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
                 'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
+                'provenance': serializable_provenance,
             }
         return serializable_state
 
@@ -471,6 +685,13 @@ def load_processed_state(log_func):
             except (TypeError, ValueError):
                 last_attempt_time = 0
 
+            provenance = state.get('provenance', {})
+            sanitized_provenance = {}
+            if isinstance(provenance, dict):
+                for h, sources in provenance.items():
+                    if isinstance(sources, (list, set, tuple)):
+                        sanitized_provenance[str(h)] = [str(s) for s in sources if s]
+
             sanitized_state[filepath] = {
                 'last_byte_offset': byte_offset,
                 'size': byte_offset,
@@ -481,6 +702,7 @@ def load_processed_state(log_func):
                 'retry_scheduled': False,
                 'file_ctime_ns': int(state.get('file_ctime_ns', 0) or 0),
                 'file_mtime_ns': int(state.get('file_mtime_ns', 0) or 0),
+                'provenance': sanitized_provenance,
             }
 
         with processed_state_lock:
@@ -526,6 +748,9 @@ def load_line_cache(log_func):
             added_lines_cache = OrderedDict()
             if isinstance(loaded_lines, list):
                 remember_global_lines(loaded_lines)
+            elif isinstance(loaded_lines, dict):
+                for h, line in loaded_lines.items():
+                    added_lines_cache[str(h)] = str(line)
             log_func(f"백엔드: 라인 캐시({cache_path}) 로드됨 ({len(added_lines_cache)}개).")
             
             # 캐시 크기 제한 (메모리 최적화)
@@ -553,7 +778,7 @@ def optimize_cache_size(log_func):
         log_func(f"백엔드: 라인 캐시 크기 최적화 - 가장 오래된 {items_to_remove}개 항목 제거됨 (현재 {len(added_lines_cache)}개)")
         try:
             with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False)
+                json.dump(dict(added_lines_cache), f, ensure_ascii=False)
             log_func("백엔드: 최적화된 라인 캐시 저장 완료")
         except Exception as e:
             log_func(f"경고: 최적화된 라인 캐시 저장 실패 - {e}")
@@ -563,10 +788,42 @@ def save_line_cache(log_func):
     log_func(f"백엔드: 라인 캐시 저장 시도 ({len(added_lines_cache)}개)...")
     try:
         with open(LINE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(list(added_lines_cache.keys()), f, ensure_ascii=False, indent=4)
+            json.dump(dict(added_lines_cache), f, ensure_ascii=False, indent=4)
         log_func(f"백엔드: 라인 캐시 저장 완료 ({LINE_CACHE_FILE}).")
     except Exception as e:
         log_func(f"오류: 라인 캐시 저장 실패 - {e}")
+
+def load_duplicate_stats(log_func):
+    global duplicate_stats
+    stats_path = DUPLICATE_STATS_FILE
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                duplicate_stats = loaded
+                log_func(f"백엔드: 중복 통계({stats_path}) 로드됨 ({len(duplicate_stats)}개).")
+            else:
+                log_func(f"경고: 중복 통계 파일 형식이 잘못됨. 빈 통계로 시작.")
+                duplicate_stats = {}
+        except Exception as e:
+            log_func(f"경고: 중복 통계 로드 실패 - {e}")
+            duplicate_stats = {}
+    else:
+        log_func(f"백엔드: 중복 통계 파일({stats_path}) 없음. 새로 시작합니다.")
+        duplicate_stats = {}
+
+def save_duplicate_stats(log_func):
+    log_func(f"백엔드: 중복 통계 저장 시도 ({len(duplicate_stats)}개)...")
+    try:
+        target_dir = os.path.dirname(DUPLICATE_STATS_FILE)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        with open(DUPLICATE_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(duplicate_stats, f, ensure_ascii=False, indent=4)
+        log_func(f"백엔드: 중복 통계 저장 완료 ({DUPLICATE_STATS_FILE}).")
+    except Exception as e:
+        log_func(f"오류: 중복 통계 저장 실패 - {e}")
 
 # --- 파일 읽기 헬퍼 함수 ---
 def read_file_with_multiple_encodings(filepath, start_byte_offset, log_func):
@@ -701,13 +958,16 @@ class FileEventHandler(FileSystemEventHandler):
     def on_modified(self, event): self.process(event)
 
 # --- 핵심 파일 처리 함수 (Docs 기록 버전) ---
-def process_file(filepath, config, services, log_func, extracted_result_callback=None, event_type=None):
+def process_file(filepath, config, services, log_func, extracted_result_callback=None, event_type=None, dual_output_manager=None):
     """ 감지된 파일을 읽고, 중복 제거 후 Google Docs에 기록 """
     # 백엔드 로거 가져오기
     backend_logger = logging.getLogger('backend_processor')
     # 필요한 서비스 및 설정 가져오기
     docs_service = services.get('docs') if services else None
     docs_id = config.get('docs_id')
+
+    if dual_output_manager is None and config:
+        dual_output_manager = get_dual_output_manager(config)
 
     try:
         # --- 1. 새로운 내용 식별 ---
@@ -759,8 +1019,91 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         # 파일 읽기 실패 또는 빈 내용 처리
         if new_raw_content is None or not new_raw_content.strip():
             backend_logger.debug(f"파일 내용 없음 또는 읽기 실패: {os.path.basename(filepath)}")
+
+        # --- 2. 콘텐츠 파싱 모드 분기 ---
+        parsing_mode = config.get('content_parsing_mode', 'line')
+
+        if parsing_mode == 'block':
+            try:
+                from .block_parser import StructuredBlockParser
+            except ImportError:
+                from src.auto_write_txt_to_docs.block_parser import StructuredBlockParser
+
+            block_separator = config.get('block_separator', '-------------------------------------------------------------------------------')
+            field_patterns = config.get('field_patterns', {})
+            parser = StructuredBlockParser(
+                block_separator=block_separator,
+                field_patterns=field_patterns,
+            )
+            blocks = parser.parse(new_raw_content, source_file=filepath)
+            valid_blocks = [b for b in blocks if parser.validate_block(b)[0]]
+            flexible_strategy = get_flexible_strategy(config)
+            if flexible_strategy:
+                new_blocks = flexible_strategy.get_new_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                new_blocks = get_new_blocks(valid_blocks)
+
+            if not new_blocks:
+                log_func(f"  - 중복 블록만 감지되어 Google Docs 기록 생략 (파일: {os.path.basename(filepath)})")
+                if flexible_strategy:
+                    flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+                else:
+                    remember_global_blocks(valid_blocks)
+                save_block_cache(log_func)
+                mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
+                schedule_processed_state_save(log_func)
+                return
+
+            block_texts = [b.raw_text for b in new_blocks]
+            extraction_record = build_extraction_record(filepath, block_texts)
+            text_to_insert = extraction_record['document_text']
+
+            log_func(f"  - Google Docs에 {len(new_blocks)}개 블록 추가 시도 (파일: {os.path.basename(filepath)})...")
+            try:
+                requests = [{'insertText': {'endOfSegmentLocation': {'segmentId': ''}, 'text': text_to_insert}}]
+                docs_service.documents().batchUpdate(documentId=docs_id, body={'requests': requests}).execute()
+                log_func(f"  - Google Docs 업데이트 완료 (파일: {os.path.basename(filepath)}, {len(new_blocks)}개 블록 추가)")
+                backend_logger.info(f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(new_blocks)}개 블록 추가")
+            except RefreshError as error:
+                handle_google_refresh_error(filepath, log_func, error, backend_logger)
+                return
+            except HttpError as error:
+                log_func(f"오류: Docs 업데이트 API 오류 - {error}")
+                backend_logger.error(f"Docs 업데이트 API 오류: {error}")
+                schedule_retry(filepath, log_func, "Google Docs API 오류", current_time)
+                return
+            except Exception as e:
+                log_func(f"오류: Docs 업데이트 중 예외 발생 - {e}")
+                backend_logger.error(f"Docs 업데이트 중 예외 발생: {e}", exc_info=True)
+                log_func(traceback.format_exc())
+                schedule_retry(filepath, log_func, "Google Docs 업데이트 예외", current_time)
+                return
+
+            if flexible_strategy:
+                flexible_strategy.remember_blocks(valid_blocks, block_dedupe_cache)
+            else:
+                remember_global_blocks(valid_blocks)
+            save_block_cache(log_func)
+            if dual_output_manager:
+                try:
+                    write_dual_output_files(
+                        dual_output_manager,
+                        filepath,
+                        [block.raw_text for block in valid_blocks],
+                        block_texts,
+                        log_func,
+                    )
+                except Exception as e:
+                    backend_logger.warning(f"이중 출력 저장 실패: {e}")
+            if extracted_result_callback:
+                try:
+                    extracted_result_callback(extraction_record)
+                except Exception as callback_error:
+                    backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
+            log_func(f"처리 완료: {os.path.basename(filepath)}")
+            backend_logger.info(f"파일 처리 완료: {os.path.basename(filepath)}")
             return
 
         new_lines = [line.strip() for line in new_raw_content.strip().split('\n') if line.strip()]
@@ -774,9 +1117,10 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         global added_lines_cache
         file_seen_hashes = get_file_seen_hashes(filepath)
         should_record_duplicate_file_marker = last_byte_offset == 0 and not file_seen_hashes
+        line_hashes = {line: hash_line_for_dedupe(line) for line in new_lines}
         truly_new_lines = [
             line for line in new_lines
-            if line not in added_lines_cache and hash_line_for_dedupe(line) not in file_seen_hashes
+            if line_hashes[line] not in added_lines_cache and line_hashes[line] not in file_seen_hashes
         ]
 
         if not truly_new_lines: # 추가할 새 라인 없음
@@ -809,6 +1153,9 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
                             extracted_result_callback(duplicate_record)
                         except Exception as callback_error:
                             backend_logger.warning(f"추출 결과 콜백 처리 실패: {callback_error}")
+                except RefreshError as error:
+                    handle_google_refresh_error(filepath, log_func, error, backend_logger)
+                    return
                 except HttpError as error:
                     log_func(f"오류: Docs 업데이트 API 오류 - {error}")
                     backend_logger.error(f"Docs 업데이트 API 오류: {error}")
@@ -830,6 +1177,11 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
 
             remember_global_lines(new_lines)
             remember_file_lines(filepath, new_lines)
+            if dual_output_manager:
+                try:
+                    write_dual_output_files(dual_output_manager, filepath, new_lines, [], log_func)
+                except Exception as e:
+                    backend_logger.warning(f"이중 출력 저장 실패: {e}")
             mark_file_processed(filepath, current_byte_size, current_time, file_identity=current_identity)
             schedule_processed_state_save(log_func)
             log_func(f"처리 완료: {os.path.basename(filepath)}")
@@ -863,6 +1215,9 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
             backend_logger.info(
                 f"Google Docs 업데이트 완료: {os.path.basename(filepath)} / {len(truly_new_lines)}줄 추가"
             )
+        except RefreshError as error:
+            handle_google_refresh_error(filepath, log_func, error, backend_logger)
+            return
         except HttpError as error:
             log_func(f"오류: Docs 업데이트 API 오류 - {error}")
             backend_logger.error(f"Docs 업데이트 API 오류: {error}")
@@ -879,6 +1234,12 @@ def process_file(filepath, config, services, log_func, extracted_result_callback
         backend_logger.debug(f"라인 캐시에 새로운 {len(truly_new_lines)}줄 추가")
         remember_global_lines(new_lines)
         remember_file_lines(filepath, new_lines)
+
+        if dual_output_manager:
+            try:
+                write_dual_output_files(dual_output_manager, filepath, new_lines, truly_new_lines, log_func)
+            except Exception as e:
+                backend_logger.warning(f"이중 출력 저장 실패: {e}")
 
         if extracted_result_callback:
             try:
@@ -926,6 +1287,9 @@ def run_monitoring(
     backend_logger.info(f"라인 캐시 로드 완료 - 캐시된 라인 수: {len(added_lines_cache)}")
     load_processed_state(log_func_threadsafe) # 처리 상태 로드
     backend_logger.info(f"처리 상태 로드 완료 - 추적 파일 수: {len(processed_file_states)}")
+    load_block_cache(log_func_threadsafe)
+    backend_logger.info(f"블록 중복 캐시 로드 완료 - 캐시된 블록 수: {len(block_dedupe_cache)}")
+    warm_block_cache_from_processed_files(config, log_func_threadsafe)
 
     google_services = preloaded_services
     if google_services and 'docs' in google_services:
@@ -1043,6 +1407,8 @@ def run_monitoring(
         log_func_threadsafe("백엔드: 감시자 종료 완료.")
         backend_logger.info("감시자 종료 완료")
         save_line_cache(log_func_threadsafe) # 최종 라인 캐시 저장
+        save_block_cache(log_func_threadsafe) # 최종 블록 중복 캐시 저장
         flush_processed_state_save(log_func_threadsafe) # 최종 처리 상태 저장
         log_func_threadsafe("백엔드: 모든 작업 완료.")
         backend_logger.info("모든 작업 완료")
+

@@ -31,6 +31,7 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(normalize_version_tag("v0.6.1"), "0.6.1")
         self.assertEqual(normalize_version_tag("refs/tags/v0.6.2"), "0.6.2")
         self.assertEqual(normalize_version_tag("release-0.6.3"), "0.6.3")
+        self.assertEqual(normalize_version_tag("v1.2.0-alpha"), "1.2.0-alpha")
 
     def test_parse_version_tuple_extracts_numeric_parts(self):
         self.assertEqual(parse_version_tuple("v1.2.10"), (1, 2, 10))
