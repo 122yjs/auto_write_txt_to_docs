@@ -35,7 +35,7 @@ jobs:
             fi
           fi
           # 열린 PR이 있을 때만 생성을 건너뛴다.
-          open_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          open_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$open_pr" ]; then
             echo "PR already exists for $branch"
             exit 0
