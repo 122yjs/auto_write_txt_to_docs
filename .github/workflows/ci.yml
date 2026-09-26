@@ -5,9 +5,13 @@ on:
   push:
     branches: [main, master]
 
+# 호출하는 쪽의 권한이 상한이다. reusable-ci.yml의 ci 잡이 요청하는
+# contents, pull-requests, checks, statuses를 모두 줘야 잡이 시작된다.
 permissions:
   contents: read
   pull-requests: write
+  checks: read
+  statuses: read
 
 jobs:
   call-reusable:
